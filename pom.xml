@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.0.3</version>
+		<relativePath/>
+	</parent>
+
+	<groupId>dev.sindic.enrollmenthub</groupId>
+	<artifactId>enrollment-hub</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>pom</packaging>
+
+	<modules>
+		<module>contracts</module>
+		<module>geo-scoring</module>
+		<module>decision-engine</module>
+		<module>gateway</module>
+		<module>load-test</module>
+	</modules>
+
+	<properties>
+		<java.version>25</java.version>
+		<spring-cloud.version>2025.1.1</spring-cloud.version>
+		<springdoc.version>2.8.6</springdoc.version>
+		<skipITs>false</skipITs>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.cloud</groupId>
+				<artifactId>spring-cloud-dependencies</artifactId>
+				<version>${spring-cloud.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>org.testcontainers</groupId>
+				<artifactId>testcontainers-bom</artifactId>
+				<version>1.20.6</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<plugins>
+			<!-- Lombok annotation processor — inherited by all submodules -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+				<version>3.5.5</version>
+				<configuration>
+					<trimStackTrace>false</trimStackTrace>
+					<skipITs>${skipITs}</skipITs>
+					<!--
+					  Docker-java 3.4.x bundled by Testcontainers defaults to API v1.32, which
+					  Docker Engine 29+ rejects (MinAPIVersion 1.40). Pin a modern version so
+					  Testcontainers-backed ITs negotiate successfully against current daemons.
+					-->
+					<environmentVariables>
+						<DOCKER_API_VERSION>1.43</DOCKER_API_VERSION>
+					</environmentVariables>
+					<systemPropertyVariables>
+						<api.version>1.43</api.version>
+					</systemPropertyVariables>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Explicitly grant the permissions required by the action
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      contracts: ${{ steps.filter.outputs.contracts }}
+      gateway: ${{ steps.filter.outputs.gateway }}
+      geo-scoring: ${{ steps.filter.outputs.geo-scoring }}
+      decision-engine: ${{ steps.filter.outputs.decision-engine }}
+      load-test: ${{ steps.filter.outputs.load-test }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            contracts:
+              - 'pom.xml'
+              - 'contracts/**'
+            gateway:
+              - 'gateway/**'
+            geo-scoring:
+              - 'geo-scoring/**'
+            decision-engine:
+              - 'decision-engine/**'
+            load-test:
+              - 'load-test/**'
+
+  build:
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Resolve modules to build
+        id: modules
+        run: |
+          # workflow_dispatch has no diff base — build everything
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || \
+                "${{ needs.changes.outputs.contracts }}" == "true" ]]; then
+            echo "list=contracts,gateway,geo-scoring,decision-engine,load-test" >> "$GITHUB_OUTPUT"
+          else
+            MODS=""
+            [[ "${{ needs.changes.outputs.gateway }}"     == "true" ]] && MODS="$MODS,gateway"
+            [[ "${{ needs.changes.outputs.geo-scoring }}" == "true" ]] && MODS="$MODS,geo-scoring"
+            [[ "${{ needs.changes.outputs.decision-engine }}" == "true" ]] && MODS="$MODS,decision-engine"
+            [[ "${{ needs.changes.outputs.load-test }}"   == "true" ]] && MODS="$MODS,load-test"
+            echo "list=${MODS#,}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & test changed modules
+        if: steps.modules.outputs.list != ''
+        run: |
+          ./mvnw -pl "${{ steps.modules.outputs.list }}" -am verify -DskipITs --batch-mode --no-transfer-progress

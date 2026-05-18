@@ -1,0 +1,56 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.DS_Store
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### structurizr ###
+docs/structurizr/workspace.json
+docs/structurizr/.structurizr/
+
+### claude artifacts ###
+notes/claude_trial/CLAUDE.md
+.claude/
+
+### local stuff ###
+notes/
+
+### env variables for local dev
+.env
+
+### unfinished scaffolding
+decision-engine/
+monitoring/
+load-test/
+gateway/
+geo-scoring/
+docs_templates

@@ -1,0 +1,17 @@
+name: RunnerResources
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-resources:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print runner resources
+        run: |
+          echo "--- Total RAM ---"
+          free -h
+          echo "--- CPU Info ---"
+          nproc
+          echo "--- Disk Space ---"
+          df -h
