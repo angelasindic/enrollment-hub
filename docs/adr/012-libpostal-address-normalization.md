@@ -17,14 +17,15 @@ Three options were considered:
 
 ## Decision
 
-Use `pelias/libpostal-service` as a sidecar HTTP service for address normalization. The normalization algorithm:
+Use `pelias/libpostal-service` as a sidecar HTTP service for address normalization. The canonical form is built by
+parsing the address into `{label, value}` components, sorting by `label`, and joining the pairs into a single
+string that is then HMAC-SHA256 hashed (with a server-side pepper) into the geocoding cache key. The full
+procedure — endpoint, join separator, and the role of the label prefix — is documented in
+`geo-scoring/design.md` Step 1.
 
-1. Call `GET /parse?address=...` → list of `{label, value}` components
-2. Sort components by `label` alphabetically — this ensures deterministic output regardless of component order in the response
-3. Join `label:value` pairs with a single space — the canonical normalised string (including the label prevents components with identical values but different types from producing the same key)
-4. HMAC-SHA256 hash the canonical string with a server-side secret pepper → geocoding cache key
-
-Sorting by label rather than relying on response order is the key invariant: libpostal's parse output order is not guaranteed to be stable across versions or locales, but the set of label-value pairs is.
+**Sort-by-label is the load-bearing invariant.** libpostal's response order is not guaranteed stable across
+versions or locales, but the *set* of label-value pairs is. Sorting by label is what makes the canonical form
+deterministic, and it is the reason this normalization can be relied on as the cache key.
 
 **No pre-processing of diacritics:** an earlier approach stripped diacritics (e.g. "ü" → "u") before passing the address to libpostal. This was rejected because libpostal is trained on real-world addresses that include diacritics, and stripping them upfront can degrade parse quality. The output is ultimately passed to the Nominatim geocoding API, which also handles diacritics correctly. Pre-processing was therefore unnecessary and potentially harmful.
 

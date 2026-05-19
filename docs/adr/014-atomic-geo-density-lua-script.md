@@ -191,25 +191,16 @@ since the data is ephemeral.
   which uses the Lua script exclusively. Direct Redis writes are not part of the
   service contract.
 
-## Configuration
+## Configuration & implementation
 
-```yaml
-geo-index:
-  key-prefix: geo
-  search-limit: 200         # GEOSEARCH COUNT cap
-  ttl: PT48H                # ADR-004 window
-  cleanup-interval: PT1H    # scheduled job cadence
-  cleanup-batch-size: 1000  # members removed per Lua invocation
-```
+This ADR fixes the *mechanism* (atomic Lua + companion ZSET + scheduled cleanup) and the *parameter set*
+that needs to be tunable (`key-prefix`, `search-limit`, `ttl`, `cleanup-interval`, `cleanup-batch-size`).
+Concrete defaults, environment variables, and the Java/Lua file layout that implements the mechanism are
+documented alongside the code rather than duplicated here:
 
-## Implementation references
-
-- `geo-scoring/src/main/resources/scripts/geo-density.lua` — atomic density check + dual-write
-- `geo-scoring/src/main/resources/scripts/geo-cleanup.lua` — atomic batched eviction
-- `geo-scoring/src/main/java/.../service/GeoIndexService.java` — script invocation and cleanup loop
-- `geo-scoring/src/main/java/.../service/GeoIndexCleanupJob.java` — `@Scheduled` entry point
-- `geo-scoring/src/main/java/.../service/GeoIndexKeyStrategy.java` — key naming
-- `geo-scoring/src/main/java/.../service/GeoIndexProperties.java` — config bindings
+- Configuration defaults and environment overrides — `geo-scoring/README.md` ("Configuration" table).
+- Lua script contents, Java service responsibilities, and the cleanup-job wiring — `geo-scoring/design.md`
+  (§"Steps 2 & 3 — Atomic Density Check + Index" and §"TTL companion sorted set").
 
 ## Related
 

@@ -31,8 +31,13 @@ libpostal normalisation ensures "123 Main St" and "123 main street" resolve to t
 
 ## Consequences
 
-- `docker-compose.yml` includes a `nominatim` service with a configurable PBF extract URL.
-- `application.yml` configures `nominatim.host` and `nominatim.port`.
-- Nominatim startup imports the PBF extract on first run (minutes for a single country); a named Docker volume
-  persists imported data across restarts.
-- No Google Maps API key or ToS review required.
+- **No third-party ToS or quota concerns** — cache TTL is a purely technical decision, and no API key rotation
+  or per-request cost accounting is required.
+- **Geocoding latency dominated by Nominatim, not network** — self-hosted Nominatim responds in ~50–200 ms;
+  the Redis cache (≈0.1 ms) is what absorbs repeat lookups.
+- **First-run import cost** — Nominatim's first start imports the configured PBF extract (~minutes to hours
+  depending on region size). This is a deployment-time concern, not a request-path concern. Setup specifics —
+  PBF region selection, import times, Docker volume layout, configuration knobs — are documented in
+  `geo-scoring/README.md`.
+- **Heavier local footprint than a SaaS provider** — running Nominatim adds a Postgres-backed container with
+  its own memory and disk profile (see README for sizing guidance).
