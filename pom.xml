@@ -18,9 +18,6 @@
 	<modules>
 		<module>contracts</module>
 		<module>geo-scoring</module>
-		<module>decision-engine</module>
-		<module>gateway</module>
-		<module>load-test</module>
 	</modules>
 
 	<properties>

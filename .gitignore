@@ -37,9 +37,6 @@ build/
 docs/structurizr/workspace.json
 docs/structurizr/.structurizr/
 
-### claude artifacts ###
-notes/claude_trial/CLAUDE.md
-.claude/
 
 ### local stuff ###
 notes/
@@ -52,5 +49,8 @@ decision-engine/
 monitoring/
 load-test/
 gateway/
-geo-scoring/
-docs_templates
+
+## claude
+.claude/
+.claude-plugin/
+CLAUDE.md
