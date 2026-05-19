@@ -1,40 +1,52 @@
 # Enrollment Hub
 
-> An event-driven, asynchronous enrollment pipeline with geo-temporal fraud detection,
-> built to demonstrate production-grade architecture patterns in a regulated context.
+> A fraudster with twenty synthetic identities diversifies payment instruments, IP addresses, and device fingerprints.
+> Standard fraud checks pass. The shared apartment address doesn't. The Enrollment Hub detects that cluster by scoring
+> incoming enrollment addresses against a real-time geographic density index, with a type system that ensures a
+> misconfigured threshold inflates the review queue but can never cause a wrongful rejection.
 
 ---
 
 ## What this is
 
-The Enrollment Hub mediates between a registration frontend and downstream fulfillment services. It accepts enrollment
-requests durably, fans out to parallel risk-evaluation signals, and emits a single `EnrollmentDecisionEvent`
-out-of-band — decoupling applicant-visible latency from the time required for fraud and geo-density signals to complete.
+The Enrollment Hub is an event-driven, asynchronous registration pipeline featuring geo-temporal fraud detection. It is
+designed around the core requirements of an enterprise enrollment system: **data concurrency, automated GDPR compliance
+built directly into the data lifecycle, and compile-time structural safety.**
 
-The hub's primary novel capability is a **Geo-Scoring module** that detects anomalous spatial clustering of enrollment
-addresses. This targets a specific gap in standard fraud defences: synthetic identity fraud rings that diversify payment
-instruments and digital fingerprints but remain physically concentrated — and therefore detectable through geographic
-density analysis. The business case and rollout strategy for this module are described in
-the [Geo-Scoring Business Analysis](geo_scoring_business_analysis.md).
+Positioned between the registration frontend and downstream fulfillment services, the hub ingests enrollment requests,
+fans out to parallel risk-evaluation services, and emits an asynchronous enrollment event. This decoupled
+approach ensures applicant-facing latency remains entirely independent of downstream services with unpredictable or
+unreliable execution times.
+
+The system's important enhancement is a **Geo-Scoring module** designed to detect synthetic identity fraud. While advanced
+fraud rings can randomize digital fingerprints and payment methods, they frequently rely on the same physical delivery
+addresses. The Geo-Scoring module indexes and analyzes these addresses in real time to flag anomalous geographic
+clustering.
+
+> For a detailed look at the market validation, metrics, and rollout strategy for this module, 
+> see the [Geo-Scoring Business Analysis](geo_scoring_business_analysis.md).
 
 ---
 
 ## What this demonstrates
 
-**Asynchronous scatter-gather orchestration.** Enrollment requests are accepted durably, routed by payment type
-(credit-card / invoice) via a RabbitMQ topic exchange, and fanned out to independent signal services. A Decision Engine
-correlates results and emits a terminal `EnrollmentDecisionEvent` once all applicable signals have settled or timed out.
-The pattern handles concurrent result arrival, partial signal availability, and fail-open degradation without
-application-level coordination between signal services.
+### Asynchronous scatter-gather orchestration
+
+Incoming HTTP requests are immediately offloaded to a durable intake queue, isolating the external API boundary from
+background processing. The Decision Engine consumes from this intake queue and dispatches the requests across a RabbitMQ
+topic exchange, fanning out to independent signal services based on payment type (credit-card / invoice). The engine
+then correlates the incoming results and emits a terminal `EnrollmentDecisionEvent` once all applicable signals settle
+or time out. This pattern handles concurrent result arrival, partial signal availability, and fail-open degradation
+without requiring application-level coordination between services.
 
 **Signal classification model (ADR-018).** Each signal declares a `GateClassification` that drives how the Decision
 Engine treats its result and its absence:
 
-| Classification    | Missing signal | Authority over outcome          | Current assignment |
-|-------------------|----------------|---------------------------------|--------------------|
-| `REQUIRED`        | Blocks decision | Authoritative — any outcome    | Reserved (future)  |
-| `BEST_EFFORT`     | Fail-open       | Authoritative — any outcome    | Fraud Detection    |
-| `SCORING_SIGNAL`  | Fail-open       | Advisory — `CONDITIONAL_APPROVED` only, never `REJECTED` | Geo-Scoring |
+| Classification   | Missing signal  | Authority over outcome                                   | Current assignment |
+|------------------|-----------------|----------------------------------------------------------|--------------------|
+| `REQUIRED`       | Blocks decision | Authoritative — any outcome                              | Reserved (future)  |
+| `BEST_EFFORT`    | Fail-open       | Authoritative — any outcome                              | Fraud Detection    |
+| `SCORING_SIGNAL` | Fail-open       | Advisory — `CONDITIONAL_APPROVED` only, never `REJECTED` | Geo-Scoring        |
 
 The asymmetry is structurally enforced in the aggregation loop — the `SCORING_SIGNAL` branch can only set the
 review flag; the rejection accumulator is physically unreachable from it. Misconfiguring a geo-density threshold
