@@ -517,13 +517,10 @@ transparent to the decision engine.
 
 ### 8.2 PII & Privacy Strategy
 
-- **Two-cache with different privacy rules:**
-    - **Geocoding cache:** `HMAC-SHA256(normalized address, secret pepper) → lat/lon`. No enrollment IDs, no timestamps, no
-      link to any natural person. HMAC keys prevent address reconstruction even if an attacker obtains the cache — the
-      pepper is required to reproduce any key. Configurable TTL (no external ToS constraints — ADR-013).
-    - **Geo-index:** country-partitioned ZSETs (`geo:{countryCode}`) with `request_id` as member and
-      geohash-of-coordinates as score; 48h per-member TTL. Personal data — identifiable enrollment linked to location and
-      time. Protected by automatic expiration (ADR-004), data minimization, and optional geo-indistinguishability noise.
+- **Two structures with different privacy rules:** The geocoding cache (keyed hash → coordinates; no identifiers)
+  and the geo-index (per-enrollment members in time-bounded country partitions) carry different PII profiles and
+  are protected differently — see `geo-scoring/design.md` for the keying scheme, score encoding, and per-member
+  TTL mechanism.
 - **Data minimization:** Only coordinates cached in the geo-index; no full names, phone numbers, or exact unit numbers.
   Geocoding cache stores only hashed address keys and coordinates.
 - **Ephemeral storage (geo-index):** 48-hour TTL — automatic expiration. Data expires automatically, limiting retention.
@@ -568,7 +565,7 @@ and geocoding cache; raw addresses are transient in the event bus only. See §8.
 | Enrollment state                       | Decision-Engine                | PostgreSQL (correlation DB)        |
 | Raw address string                     | Decision-Engine → Geo-Scoring  | RabbitMQ event payload (transient) |
 | Geocoded coordinates                   | Geo-Scoring                    | Redis/Valkey Geo-Index (48h TTL)   |
-| Geocoding cache                        | Geo-Scoring                    | Redis/Valkey (30-day TTL)          |
+| Geocoding cache                        | Geo-Scoring                    | Redis/Valkey (90-day TTL by default; configurable) |
 | Geo-score result                       | Geo-Scoring → decision engine  | RabbitMQ → correlation DB          |
 
 ### 8.5 DORA/NIS2 Alignment
