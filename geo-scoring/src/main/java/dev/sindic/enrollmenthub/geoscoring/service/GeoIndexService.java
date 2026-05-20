@@ -3,6 +3,7 @@ package dev.sindic.enrollmenthub.geoscoring.service;
 import dev.sindic.enrollmenthub.contracts.events.GeoScoreResult;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -25,6 +26,7 @@ import java.util.UUID;
  * score LOW before any GEOADD completes.
  */
 @Slf4j
+@EnableConfigurationProperties(GeoIndexProperties.class)
 @Service
 public class GeoIndexService {
 

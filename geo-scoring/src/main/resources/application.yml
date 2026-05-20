@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: geo-scoring
+  threads:
+    virtual:
+      enabled: true
   jackson:
     deserialization:
       fail-on-unknown-properties: false
