@@ -29,7 +29,7 @@ deterministic, and it is the reason this normalization can be relied on as the c
 
 **No pre-processing of diacritics:** an earlier approach stripped diacritics (e.g. "ü" → "u") before passing the address to libpostal. This was rejected because libpostal is trained on real-world addresses that include diacritics, and stripping them upfront can degrade parse quality. The output is ultimately passed to the Nominatim geocoding API, which also handles diacritics correctly. Pre-processing was therefore unnecessary and potentially harmful.
 
-**Fail-open policy:** if libpostal is unreachable or returns no components, the flattened raw string is used as the cache key. This degrades cache hit rate but does not block geo-scoring.
+**Fail-open policy (layered failure model):** `LibpostalClient` distinguishes input rejection (non-transient 4xx → empty component list) from transient outage (5xx, transport error, `408`/`429` → `TransientGeocodingException`). `AddressNormalizationService` deliberately catches both at the same fallback point: if libpostal is unreachable *or* returns no components, the flattened raw string is used under a synthetic `address` label. This degrades cache hit rate but does not block geo-scoring — Nominatim's free-form fallback can still resolve the address. The retry chain is reserved for Nominatim sickness (the only path to coordinates), not for libpostal outages, where graceful degradation is the better trade-off.
 
 ## Consequences
 

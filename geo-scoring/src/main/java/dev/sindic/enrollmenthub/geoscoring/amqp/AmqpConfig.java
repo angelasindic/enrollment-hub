@@ -1,9 +1,3 @@
-// Target:  JDK 25 / Spring Boot 4.x / Spring AMQP 4.x / Jackson 3.x (tools.jackson)
-// Status:  Reference
-// Assumes: RabbitMQ broker running; connection factory auto-configured via application.yml
-// Note:    Jackson 3.x (tools.jackson.*) replaces Jackson 2.x (com.fasterxml.jackson.*)
-//          Spring Boot 4.x auto-configures a JsonMapper bean via JacksonAutoConfiguration.
-
 package dev.sindic.enrollmenthub.geoscoring.amqp;
 
 import io.micrometer.core.instrument.Counter;

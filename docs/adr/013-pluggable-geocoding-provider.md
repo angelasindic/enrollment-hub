@@ -15,7 +15,9 @@ these concerns are not justified.
 Use **Nominatim** (`mediagis/nominatim`, self-hosted) as the geocoding provider for the portfolio MVP. No
 pluggable provider abstraction is built for future migration — Nominatim is the provider.
 
-A `MockGeocodingProvider` is retained for offline development and CI where Nominatim is unavailable.
+The `GeocodingProvider` interface is retained as a unit-test seam (Mockito stubs it in
+`GeocodingServiceTest`); it carries no runtime selection logic. Local development uses the same
+`NominatimGeocodingProvider` as production, against the Docker-Compose Nominatim instance.
 
 **Why Nominatim:**
 - No API costs or rate limits — self-hosted, no per-request pricing or quota monitoring.

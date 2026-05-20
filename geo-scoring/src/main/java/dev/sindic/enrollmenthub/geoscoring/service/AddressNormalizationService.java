@@ -1,7 +1,3 @@
-// Target:  JDK 25 / Spring Boot 4.x
-// Status:  Reference
-// Assumes: LibpostalClient configured; libpostal service reachable at startup
-
 package dev.sindic.enrollmenthub.geoscoring.service;
 
 import dev.sindic.enrollmenthub.contracts.domain.Address;
@@ -31,22 +27,28 @@ public class AddressNormalizationService {
      * <p>Flattens the {@link Address} fields into a single string, then parses it via
      * libpostal into labeled components, sorts by label, and joins the values.
      *
-     * <p>Fails open: if libpostal is unavailable or returns no components, the
-     * flattened raw string is returned so that geo-scoring can proceed.
+     * <p><b>Failure model.</b> {@link LibpostalClient} distinguishes transient outages
+     * ({@link TransientGeocodingException}) from input rejection (empty list on 4xx).
+     * Both collapse here to the same fail-open behaviour — fall back to the trimmed
+     * raw string under a synthetic {@code address} label — so geo-scoring can still
+     * proceed. ADR-012 trades cache hit rate for availability: a libpostal outage
+     * does <i>not</i> drain the listener retry chain; Nominatim's free-form fallback
+     * is the recovery path. Any other exception propagates so genuine bugs surface.
      */
     public ParsedAddress normalize(Address address) {
         var raw = toRawString(address);
+        List<AddressComponent> components;
         try {
-            var components = libpostalClient.parse(raw);
-            if (components.isEmpty()) {
-                log.warn("libpostal returned no components for address, using pre-processed input");
-                return new ParsedAddress(List.of(new AddressComponent("address", raw)));
-            }
-            return new ParsedAddress(components);
-        } catch (Exception e) {
+            components = libpostalClient.parse(raw);
+        } catch (TransientGeocodingException e) {
             log.warn("libpostal unavailable, falling back to pre-processed address: {}", e.getMessage());
             return new ParsedAddress(List.of(new AddressComponent("address", raw)));
         }
+        if (components.isEmpty()) {
+            log.warn("libpostal returned no components for address, using pre-processed input");
+            return new ParsedAddress(List.of(new AddressComponent("address", raw)));
+        }
+        return new ParsedAddress(components);
     }
 
     /**

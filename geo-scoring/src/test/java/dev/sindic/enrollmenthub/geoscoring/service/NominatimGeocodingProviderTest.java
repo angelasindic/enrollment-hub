@@ -10,12 +10,16 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.times;
@@ -82,14 +86,45 @@ class NominatimGeocodingProviderTest {
     }
 
     @Test
-    void geocode_apiError_returnsEmpty() {
-        when(restClient.get()).thenReturn(cast(requestHeadersUriSpec));
-        when(requestHeadersUriSpec.uri(anyString())).thenReturn(cast(requestHeadersSpec));
-        when(requestHeadersSpec.retrieve()).thenThrow(new RestClientException("Connection refused"));
+    void geocode_serverError_throwsTransient_andSkipsFallback() {
+        stubError(new HttpServerErrorException(HttpStatus.BAD_GATEWAY, "Bad Gateway"));
+
+        assertThatThrownBy(() -> provider.geocode(AMSTERDAM))
+                .isInstanceOf(TransientGeocodingException.class)
+                .hasCauseInstanceOf(HttpServerErrorException.class);
+
+        // Fallback must not run when the structured query failed transiently.
+        verify(requestHeadersSpec, times(1)).retrieve();
+    }
+
+    @Test
+    void geocode_transportFailure_throwsTransient() {
+        stubError(new ResourceAccessException("connection refused"));
+
+        assertThatThrownBy(() -> provider.geocode(AMSTERDAM))
+                .isInstanceOf(TransientGeocodingException.class)
+                .hasCauseInstanceOf(ResourceAccessException.class);
+    }
+
+    @Test
+    void geocode_rateLimited_throwsTransient() {
+        stubError(new HttpClientErrorException(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests"));
+
+        assertThatThrownBy(() -> provider.geocode(AMSTERDAM))
+                .isInstanceOf(TransientGeocodingException.class)
+                .hasCauseInstanceOf(HttpClientErrorException.class);
+    }
+
+    @Test
+    void geocode_badRequest_returnsEmpty() {
+        // 4xx that isn't a transient signal → degrade to no-match, both attempts return empty.
+        stubError(new HttpClientErrorException(HttpStatus.BAD_REQUEST, "Bad Request"));
 
         var result = provider.geocode(AMSTERDAM);
 
         assertThat(result).isEmpty();
+        // Structured attempt returned empty, so fallback was attempted as well.
+        verify(requestHeadersSpec, times(2)).retrieve();
     }
 
     @Test
@@ -139,6 +174,12 @@ class NominatimGeocodingProviderTest {
         when(requestHeadersUriSpec.uri(anyString())).thenReturn(cast(requestHeadersSpec));
         when(requestHeadersSpec.retrieve()).thenReturn(responseSpec);
         when(responseSpec.body(any(ParameterizedTypeReference.class))).thenReturn(first, second);
+    }
+
+    private void stubError(RuntimeException ex) {
+        when(restClient.get()).thenReturn(cast(requestHeadersUriSpec));
+        when(requestHeadersUriSpec.uri(anyString())).thenReturn(cast(requestHeadersSpec));
+        when(requestHeadersSpec.retrieve()).thenThrow(ex);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

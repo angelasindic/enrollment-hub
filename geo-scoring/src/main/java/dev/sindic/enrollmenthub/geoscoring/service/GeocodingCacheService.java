@@ -1,7 +1,3 @@
-// Target:  JDK 25 / Spring Boot 4.x
-// Status:  Reference
-// Assumes: Redis/Valkey reachable; StringRedisTemplate and JsonMapper auto-configured
-
 package dev.sindic.enrollmenthub.geoscoring.service;
 
 import lombok.extern.slf4j.Slf4j;

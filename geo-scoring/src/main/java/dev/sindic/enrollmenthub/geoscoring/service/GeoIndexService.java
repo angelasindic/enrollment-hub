@@ -1,7 +1,3 @@
-// Target:  JDK 25 / Spring Boot 4.x
-// Status:  Reference
-// Assumes: Redis/Valkey reachable; StringRedisTemplate auto-configured
-
 package dev.sindic.enrollmenthub.geoscoring.service;
 
 import dev.sindic.enrollmenthub.contracts.events.GeoScoreResult;
