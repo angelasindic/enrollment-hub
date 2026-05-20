@@ -33,9 +33,10 @@ public class GeoIndexService {
     private final StringRedisTemplate redis;
     private final GeoIndexKeyStrategy keyStrategy;
     private final GeoIndexProperties properties;
-    private final DefaultRedisScript<List> densityScript;
+    private final DefaultRedisScript<List<Long>> densityScript;
     private final DefaultRedisScript<Long> cleanupScript;
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
     public GeoIndexService(StringRedisTemplate redis,
                            GeoIndexKeyStrategy keyStrategy,
                            GeoIndexProperties properties) {
@@ -45,7 +46,8 @@ public class GeoIndexService {
 
         this.densityScript = new DefaultRedisScript<>();
         this.densityScript.setLocation(new ClassPathResource("scripts/geo-density.lua"));
-        this.densityScript.setResultType(List.class);
+        // setResultType only accepts the erased Class — element type is enforced by the script contract.
+        this.densityScript.setResultType((Class) List.class);
 
         this.cleanupScript = new DefaultRedisScript<>();
         this.cleanupScript.setLocation(new ClassPathResource("scripts/geo-cleanup.lua"));
@@ -84,10 +86,7 @@ public class GeoIndexService {
 
         List<Long> counts;
         try {
-            @SuppressWarnings("unchecked")
-            List<Long> results = (List<Long>) redis.execute(
-                    densityScript, List.of(geoKey, ttlKey), args.toArray());
-            counts = results;
+            counts = redis.execute(densityScript, List.of(geoKey, ttlKey), args.toArray());
         } catch (DataAccessException ex) {
             log.error("Geo-density script failed key={} cause={}",
                     geoKey, ex.getMostSpecificCause().getMessage());
@@ -190,7 +189,7 @@ public class GeoIndexService {
         do {
             removed = redis.execute(cleanupScript, keys, cutoffEpoch, batchSize);
             totalRemoved += removed;
-        } while (removed >= properties.cleanupBatchSize());
+        } while (removed == properties.cleanupBatchSize());
 
         if (totalRemoved > 0) {
             log.info("Cleanup key={} removed={}", geoKey, totalRemoved);
