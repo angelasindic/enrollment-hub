@@ -289,9 +289,24 @@ messages indicate a bug, not normal operation.
 
 ### Consumer concurrency
 
-`SimpleRabbitListenerContainerFactory` uses `concurrentConsumers=1`. A single consumer on a virtual thread (ADR-008)
-is non-blocking during I/O and handles the projected load (50K enrollments/day ≈ 0.6 RPS) comfortably. Concurrency can
-be increased with a one-line configuration change when throughput requires it.
+Each consumer service runs its `SimpleRabbitListenerContainerFactory` on a `VirtualThreadTaskExecutor`
+(ADR-008) with **explicit** sizing for `concurrentConsumers`, `maxConcurrentConsumers`, and
+`spring.rabbitmq.listener.simple.prefetch` — defaults are not relied on. Two principles govern the values:
+
+- **Prefetch is held low when per-message latency is variable.** Spring Boot's default (250) assumes
+  uniform-latency handlers; a workload with cache hits and external-API misses on the same queue would
+  see high prefetch head-of-line-block slow messages behind one consumer. Low-and-multiply
+  (`concurrentConsumers × prefetch` modest) beats high-and-concentrate when handler cost varies.
+- **Sizing is per service, not pipeline-wide.** Each consumer has its own downstream bottlenecks and
+  burst profile; one queue's concurrency settings tell you nothing about another's. Concrete values and
+  in-flight ceilings live in each service's `design.md`.
+
+### Dead-letter retention
+
+Each DLQ declares an `x-message-ttl` queue argument so RabbitMQ silently drops dead-lettered messages
+older than the TTL, bounding retention across long-running brokers. The TTL is a safety net — active
+monitoring (DLQ depth alert + runbook) remains the primary signal. The specific TTL is a per-service
+tuning decision (operator triage window vs. forensic retention), documented in each service's `design.md`.
 
 ### Queue argument migration
 

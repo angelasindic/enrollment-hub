@@ -14,6 +14,14 @@ spring:
     password: ${RABBITMQ_PASSWORD:guest}
     publisher-confirm-type: correlated
     publisher-returns: true
+    listener:
+      simple:
+        # Per-consumer prefetch. Held low (vs. Boot's default 250) because per-message
+        # latency varies by ~200× between a geocoding cache hit (~1ms) and a Nominatim
+        # miss (~50–200ms); a high prefetch would head-of-line-block slow messages
+        # behind a single consumer. See AmqpConfig.CONCURRENT_CONSUMERS for the
+        # consumer-thread side of the equation (M2 in the geo-scoring review).
+        prefetch: ${RABBITMQ_LISTENER_PREFETCH:16}
   data:
     redis:
       host: ${REDIS_HOST:localhost}

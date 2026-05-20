@@ -6,6 +6,8 @@
 **Decision:** Use Java 25 virtual threads for all services. Do not use Spring WebFlux. Do not use structured concurrency (`StructuredTaskScope`).
 
 > **Partial implementation.** Virtual threads are enabled explicitly via `VirtualThreadTaskExecutor` on the AMQP listener container factory in both the decision-engine and geo-scoring services. The global `spring.threads.virtual.enabled=true` property — which would also cover Tomcat request processing and `@Scheduled` tasks — is not yet set in any `application.yml`.
+>
+> **Geo-scoring:** The listener container is now sized to actually multiplex on the virtual-thread executor; prior to this, a single consumer thread left the executor wired but idle. Concrete values live in `geo-scoring/design.md` §Listener Concurrency; the per-service sizing principle is in ADR-003 §Consumer concurrency.
 
 **Context:** The system is I/O-bound — the geo-scoring service blocks on Nominatim geocoding calls and Redis `GEOSEARCH` commands, the decision-engine blocks on PostgreSQL transactions and RabbitMQ message handling. Concurrency model choice affects readability, debugging, and operational complexity.
 
