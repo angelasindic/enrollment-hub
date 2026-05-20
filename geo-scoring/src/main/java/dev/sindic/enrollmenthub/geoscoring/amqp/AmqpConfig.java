@@ -184,10 +184,10 @@ class AmqpConfig {
     }
 
     /**
-     * Listener container factory with virtual thread executor (ADR-008).
-     *
-     * [VERIFY] VirtualThreadTaskExecutor support for SimpleRabbitListenerContainerFactory
-     * in Spring AMQP 4.x — confirm via Spring AMQP 4.x release notes before production use.
+     * Listener container factory with virtual thread executor (ADR-008). Spring AMQP 4.x accepts
+     * any {@code TaskExecutor} on the container factory; {@link VirtualThreadTaskExecutor} is wired
+     * here for the {@code amqp-geo-} thread-name prefix on top of the application-wide
+     * {@code spring.threads.virtual.enabled=true}.
      */
     @Bean
     SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
