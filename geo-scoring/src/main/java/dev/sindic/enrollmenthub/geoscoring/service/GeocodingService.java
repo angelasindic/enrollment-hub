@@ -1,6 +1,3 @@
-// Target:  JDK 25 / Spring Boot 4.x
-// Status:  Reference
-
 package dev.sindic.enrollmenthub.geoscoring.service;
 
 import dev.sindic.enrollmenthub.contracts.domain.Address;

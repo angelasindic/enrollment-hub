@@ -24,7 +24,6 @@ libpostal:
   port: 4400
 
 geocoding:
-  provider: ${GEOCODING_PROVIDER:nominatim}
   cache:
     hmac-secret: ${GEOCODING_CACHE_HMAC_SECRET}
     ttl: ${GEOCODING_CACHE_TTL:P90D}

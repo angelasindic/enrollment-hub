@@ -1,14 +1,14 @@
-// Target:  JDK 25 / Spring Boot 4.x
-// Status:  Reference
-
 package dev.sindic.enrollmenthub.geoscoring.service;
 
 import dev.sindic.enrollmenthub.geoscoring.libpostal.AddressComponent;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
 import java.net.URLEncoder;
@@ -20,7 +20,6 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Component
-@ConditionalOnProperty(name = "geocoding.provider", havingValue = "nominatim")
 public class NominatimGeocodingProvider implements GeocodingProvider {
 
     private static final String METRIC_UNMAPPED_LABEL = "geocoding.unmapped_label";
@@ -71,9 +70,25 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                     stage, coordinates.latitude(), coordinates.longitude());
             return Optional.of(coordinates);
 
-        } catch (Exception ex) {
-            log.warn("Nominatim {} query failed", stage, ex);
+        } catch (HttpClientErrorException ex) {
+            // Treat overload / timeout signals as transient so the listener retry chain
+            //  RFC 6585 frames 429 as a transient condition by design, so bounded retry is justified here
+            // replays the message; other 4xx (e.g. 400) mean the query itself is bad —
+            // retries won't help, so degrade to no-match and let the fallback try.
+            var status = ex.getStatusCode();
+            if (status == HttpStatus.TOO_MANY_REQUESTS || status == HttpStatus.REQUEST_TIMEOUT) {
+                throw new TransientGeocodingException(
+                        "Nominatim " + stage + " transient client error " + status, ex);
+            }
+            log.warn("Nominatim {} client error status={} body={}",
+                    stage, status, ex.getResponseBodyAsString());
             return Optional.empty();
+        } catch (HttpServerErrorException ex) {
+            throw new TransientGeocodingException(
+                    "Nominatim " + stage + " server error " + ex.getStatusCode(), ex);
+        } catch (ResourceAccessException ex) {
+            throw new TransientGeocodingException(
+                    "Nominatim " + stage + " unreachable", ex);
         }
     }
 

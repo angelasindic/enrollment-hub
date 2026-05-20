@@ -28,23 +28,20 @@ enrollment.events  ───► EnrollmentAcceptedListener ──► GeoScoringS
                                                        GeoScoreResultPublisher  ─────► (geo.score.completed)
 ```
 
-On geocoding failure the density check is skipped and a `GeoScoreResult` with `riskLevel=null` +
-`noResultReason="geocoding_failed"` is emitted instead (decision engine treats this as fail-open per ADR-010).
+Geocoding outcomes split two ways:
+- **No match / unparseable input** (Nominatim returns empty, libpostal returns no components, non-transient 4xx)
+  → density check skipped → `GeoScoreResult` with `riskLevel=null` + `noResultReason="geocoding_failed"` emitted
+  (decision engine fail-opens per ADR-010).
+- **Transient provider outage** (5xx, transport error, 408/429) → `TransientGeocodingException` propagates → AMQP
+  listener retries (3× with backoff) → on exhaustion the message routes to `geo.scoring.queue.dlq`. Sustained
+  outages surface as DLQ depth, not as a stream of silent `NO_RESULT`. See `design.md` §Error Handling.
+
 The 48-hour per-member TTL on the geo-index is enforced out of band by `GeoIndexCleanupJob` (see design.md).
 
-### Geocoding Provider Selection (ADR-013)
+### Geocoding Provider (ADR-013)
 
-ADR-013 commits to Nominatim as *the* geocoding provider — no generic pluggable abstraction was built for future
-swapping. A second implementation (`MockGeocodingProvider`) is retained only for offline development and CI where
-Nominatim is unavailable. Both implement the `GeocodingProvider` interface and are selected via
-`@ConditionalOnProperty` on `geocoding.provider`:
-
-| Provider | Config value | When to use |
-|---|---|---|
-| `NominatimGeocodingProvider` | `nominatim` | Production and local dev with the full container stack |
-| `MockGeocodingProvider` | `mock` (default when `geocoding.provider` is unset) | Offline dev or CI without infrastructure containers |
-
-Set via environment variable: `GEOCODING_PROVIDER=nominatim` (or `mock`).
+ADR-013 commits to Nominatim as *the* geocoding provider. `NominatimGeocodingProvider` is the sole
+`GeocodingProvider` implementation and is wired unconditionally; the interface is kept as a test seam.
 
 ## Nominatim and PBF Extracts
 
@@ -103,7 +100,6 @@ docker compose up -d  # Redis, RabbitMQ, libpostal, Nominatim
 
 | Property | Env variable | Default | Description |
 |---|---|---|---|
-| `geocoding.provider` | `GEOCODING_PROVIDER` | `nominatim` | Active geocoding provider (`nominatim` or `mock`) |
 | `nominatim.host` | `NOMINATIM_HOST` | `localhost` | Nominatim hostname |
 | `nominatim.port` | `NOMINATIM_PORT` | `8088` | Nominatim port |
 | `geocoding.cache.hmac-secret` | `GEOCODING_CACHE_HMAC_SECRET` | *(required)* | HMAC-SHA256 pepper for cache keys |

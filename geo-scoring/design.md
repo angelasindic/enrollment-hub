@@ -246,10 +246,25 @@ exponential backoff (1 s → 2 s → 4 s, capped at 10 s). After exhaustion, `Re
 the message; the broker routes it to the dead-letter exchange `geo.scoring.dlx` and queue `geo.scoring.queue.dlq`
 for operator inspection.
 
-**Geocoding failures** are *not* exceptions — `GeocodingService.resolve` returns `Optional.empty()` when the
-provider cannot resolve the address. `GeoScoringService` handles this by publishing a `GeoScoreResult` with
-`riskLevel = null` and `noResultReason = "geocoding_failed"`. No retry is triggered; the decision engine's
-fail-open path (ADR-010) absorbs the missing signal.
+**Geocoding outcomes split into three buckets**, each with a deliberate handling strategy:
+
+1. **No match / unparseable input** — Nominatim returns an empty array, libpostal returns no components, or
+   either responds with a non-transient 4xx (e.g. `400` from a malformed query). `GeocodingService.resolve`
+   returns `Optional.empty()`. `GeoScoringService` publishes a `GeoScoreResult` with `riskLevel = null` and
+   `noResultReason = "geocoding_failed"`. No retry is triggered; the decision engine's fail-open path
+   (ADR-010) absorbs the missing signal. This is the *signal absence* case ADR-010 was designed for.
+2. **Transient provider outage** — 5xx, transport error (connection refused, read timeout, DNS), or 4xx
+   codes that genuinely indicate overload (`408 Request Timeout`, `429 Too Many Requests`). Both
+   `NominatimGeocodingProvider` and `LibpostalClient` translate these into a domain-typed
+   `TransientGeocodingException` so the AMQP listener retry chain replays the message. On retry exhaustion
+   the message is routed to `geo.scoring.queue.dlq` for operator inspection — a sustained provider outage
+   surfaces as DLQ depth rather than as a stream of silent `NO_RESULT` events. `AddressNormalizationService`
+   is the one deliberate exception: it catches `TransientGeocodingException` from libpostal and falls back
+   to the raw flattened string per ADR-012, because the free-form Nominatim query can still resolve the
+   address. A Nominatim outage is what actually engages the retry chain.
+3. **Unexpected exception** — anything else (programming bug, body deserialisation error, etc.) propagates
+   unchanged. The retry chain treats it as transient and ultimately DLQs for investigation. This avoids the
+   prior "swallow every `Exception`" pattern that masked Nominatim outages as `NO_RESULT`.
 
 **Redis failures** in the Lua script path *are* exceptions. `GeoIndexService.checkAndIndex` catches
 `DataAccessException`, logs it, and re-throws unchanged so the retry chain handles transient outages. The Lua

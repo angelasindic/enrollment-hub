@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -66,13 +67,24 @@ class AddressNormalizationServiceTest {
     }
 
     @Test
-    void normalize_clientThrows_returnsPreProcessedString() {
+    void normalize_transientLibpostalOutage_failsOpenToPreProcessedString() {
         var address = new Address(List.of("Some St"), "12345", "City", "ST", "DE");
-        when(libpostalClient.parse("Some St, 12345, City, ST, DE")).thenThrow(new RuntimeException("libpostal down"));
+        when(libpostalClient.parse("Some St, 12345, City, ST, DE"))
+                .thenThrow(new TransientGeocodingException("libpostal unreachable", new RuntimeException()));
 
         var result = service.normalize(address);
 
         assertThat(result.canonical()).isEqualTo("address:Some St, 12345, City, ST, DE");
         assertThat(result.components()).containsExactly(new AddressComponent("address", "Some St, 12345, City, ST, DE"));
+    }
+
+    @Test
+    void normalize_unexpectedException_propagates() {
+        var address = new Address(List.of("Some St"), "12345", "City", "ST", "DE");
+        when(libpostalClient.parse("Some St, 12345, City, ST, DE"))
+                .thenThrow(new IllegalStateException("unexpected"));
+
+        assertThatThrownBy(() -> service.normalize(address))
+                .isInstanceOf(IllegalStateException.class);
     }
 }

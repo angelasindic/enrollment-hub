@@ -75,7 +75,6 @@ public abstract class BaseIntegrationTest {
         registry.add("libpostal.port", () -> LIBPOSTAL.getMappedPort(4400));
         registry.add("nominatim.host", NOMINATIM::getHost);
         registry.add("nominatim.port", () -> NOMINATIM.getMappedPort(8080));
-        registry.add("geocoding.provider", () -> "nominatim");
         registry.add("geocoding.cache.hmac-secret", () -> "integration-test-secret");
     }
 }
