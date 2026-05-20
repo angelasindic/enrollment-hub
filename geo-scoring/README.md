@@ -101,6 +101,7 @@ docker compose up -d  # Redis, RabbitMQ, libpostal, Nominatim
 | Property | Env variable | Default | Description |
 |---|---|---|---|
 | `nominatim.host` | `NOMINATIM_HOST` | `localhost` | Nominatim hostname |
+| `spring.rabbitmq.listener.simple.prefetch` | `RABBITMQ_LISTENER_PREFETCH` | `16` | Per-consumer unacked-message buffer. Held low because per-message latency varies ~200× (cache hit vs. Nominatim miss); a high prefetch head-of-line-blocks slow messages. See ADR-003 §Consumer concurrency. |
 | `nominatim.port` | `NOMINATIM_PORT` | `8088` | Nominatim port |
 | `geocoding.cache.hmac-secret` | `GEOCODING_CACHE_HMAC_SECRET` | *(required)* | HMAC-SHA256 pepper for cache keys |
 | `geocoding.cache.ttl` | `GEOCODING_CACHE_TTL` | `P90D` | TTL applied to cached coordinates on store (ISO-8601 duration) |

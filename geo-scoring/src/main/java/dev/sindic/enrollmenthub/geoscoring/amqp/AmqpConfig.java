@@ -23,6 +23,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.VirtualThreadTaskExecutor;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
+
 @Slf4j
 @Configuration
 @EnableConfigurationProperties(AmqpProperties.class)
@@ -43,6 +45,23 @@ class AmqpConfig {
     private static final long   INITIAL_INTERVAL = 1_000L;
     private static final double MULTIPLIER       = 2.0;
     private static final long   MAX_INTERVAL     = 10_000L;
+
+    /**
+     * Steady-state and burst concurrency for the listener container (M2 in the geo-scoring
+     * review). Threads are virtual ({@link VirtualThreadTaskExecutor}), so the cost of holding
+     * idle consumers is dominated by the Rabbit channel each one owns, not by OS threads.
+     * 8/24 keeps in-flight load on self-hosted Nominatim and Redis bounded while still
+     * absorbing realistic enrollment bursts.
+     */
+    private static final int CONCURRENT_CONSUMERS     = 8;
+    private static final int MAX_CONCURRENT_CONSUMERS = 24;
+
+    /**
+     * DLQ retention bound (geo-scoring review §C7 checklist). RabbitMQ drops messages whose
+     * age exceeds the queue {@code x-message-ttl}; without this the DLQ would grow forever.
+     * Seven days gives operators a working week to triage before automatic eviction.
+     */
+    private static final Duration DLQ_TTL = Duration.ofDays(7);
 
     /** Durable topic exchange shared across all services. Declared idempotently at startup. */
     @Bean
@@ -66,7 +85,9 @@ class AmqpConfig {
 
     @Bean
     Queue deadLetterQueue() {
-        return QueueBuilder.durable(DLQ).build();
+        return QueueBuilder.durable(DLQ)
+                .ttl((int) DLQ_TTL.toMillis())
+                .build();
     }
 
     @Bean
@@ -176,6 +197,8 @@ class AmqpConfig {
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(messageConverter);
         factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-geo-"));
+        factory.setConcurrentConsumers(CONCURRENT_CONSUMERS);
+        factory.setMaxConcurrentConsumers(MAX_CONCURRENT_CONSUMERS);
         factory.setObservationEnabled(true);
         factory.setAdviceChain(RetryInterceptorBuilder.stateless()
                 .maxRetries(MAX_RETRIES)
