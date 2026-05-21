@@ -18,6 +18,7 @@ jobs:
     outputs:
       contracts: ${{ steps.filter.outputs.contracts }}
       geo-scoring: ${{ steps.filter.outputs.geo-scoring }}
+      decision-engine: ${{ steps.filter.outputs.decision-engine }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -29,6 +30,8 @@ jobs:
               - 'contracts/**'
             geo-scoring:
               - 'geo-scoring/**'
+            decision-engine:
+              - 'decision-engine/**'
 
   build:
     needs: changes
@@ -49,10 +52,11 @@ jobs:
           # workflow_dispatch has no diff base — build everything
           if [[ "${{ github.event_name }}" == "workflow_dispatch" || \
                 "${{ needs.changes.outputs.contracts }}" == "true" ]]; then
-            echo "list=contracts,geo-scoring" >> "$GITHUB_OUTPUT"
+            echo "list=contracts,geo-scoring,decision-engine" >> "$GITHUB_OUTPUT"
           else
             MODS=""
             [[ "${{ needs.changes.outputs.geo-scoring }}" == "true" ]] && MODS="$MODS,geo-scoring"
+            [[ "${{ needs.changes.outputs.decision-engine }}" == "true" ]] && MODS="$MODS,decision-engine"
             echo "list=${MODS#,}" >> "$GITHUB_OUTPUT"
           fi
 

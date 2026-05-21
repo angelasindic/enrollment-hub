@@ -1,0 +1,55 @@
+spring:
+  application:
+    name: decision-engine
+  mvc:
+    problemdetails:
+      enabled: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/enrollmenthub
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+  flyway:
+    default-schema: enrollment_hub
+    schemas: enrollment_hub
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: enrollment_hub
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/account-assurance}
+
+# Prerequisite token validation — public keys per issuer
+# prerequisite.tokens.credit-card.jwks-uri=...
+# prerequisite.tokens.eidas.jwks-uri=...
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+decision-engine:
+  scatter-gather:
+    timeout: 1m
+  amqp:
+    confirm-timeout: ${DECISION_ENGINE_AMQP_CONFIRM_TIMEOUT:5s}
