@@ -45,7 +45,6 @@ notes/
 .env
 
 ### unfinished scaffolding
-decision-engine/
 monitoring/
 load-test/
 gateway/
