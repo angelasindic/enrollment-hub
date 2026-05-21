@@ -112,7 +112,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
         var captureQueueName = "test.decision.capture." + requestId;
         amqpAdmin.declareQueue(new Queue(captureQueueName, false, true, true));
         amqpAdmin.declareBinding(new Binding(captureQueueName, Binding.DestinationType.QUEUE,
-                AmqpConfig.EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, null));
+                AmqpConfig.DECISION_EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, null));
 
         txTemplate.executeWithoutResult(status -> {
             var entity = repository.saveAndFlush(

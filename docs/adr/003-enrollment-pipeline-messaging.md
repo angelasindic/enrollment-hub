@@ -66,8 +66,38 @@ Simplicity gate: Would a single service solve this? No — failure isolation is 
 
 ## Exchange and Queue Topology
 
+### Topology Overview
+```mermaid
+flowchart LR
+subgraph Exchanges
+    EX_INTAKE(((enrollment.intake<br/>direct)))
+    EX_EVENTS(((enrollment.events<br/>topic)))
+    EX_DECISIONS(((enrollment.decisions<br/>topic)))
+end
+    subgraph Queues
+        Q_INTAKE[[enrollment.intake.queue]]
+        Q_GEO[[geo.scoring.queue]]
+        Q_FRAUD[[fraud.detection.queue]]
+        Q_DE_GEO[[decision-engine.geo-score.queue]]
+        Q_DE_FRAUD[[decision-engine.fraud-score.queue]]
+        Q_AS[[account-service.decisions.queue<br/>out of scope]]
+    end
+    EX_INTAKE -->|"enrollment.request"| Q_INTAKE
+    EX_EVENTS -->|"enrollment.created.credit_card"| Q_GEO
+    EX_EVENTS -->|"geo.score.completed"| Q_DE_GEO
+    EX_EVENTS -->|"enrollment.created.*"| Q_FRAUD
+    EX_EVENTS -->|"fraud.score.completed"| Q_DE_FRAUD
+    EX_DECISIONS -->|"enrollment.decision.completed"| Q_AS
+    classDef ex fill:#fef3c7,stroke:#b45309
+    classDef q  fill:#a7badb,stroke:#54698c
+    class EX_INTAKE,EX_EVENTS,EX_DECISIONS ex
+    class Q_INTAKE,Q_GEO,Q_FRAUD,Q_DE_GEO,Q_DE_FRAUD,Q_AS q
+```
+
 The pipeline is organized across three exchange layers. Each layer has a distinct responsibility and isolation
-boundary.
+boundary. All exchanges and queues shown in the topology diagram above are **durable**; the layer descriptions
+below cover only the additional context (semantics, publishers/consumers, implementation status) not visible in
+the diagram. Dead-letter topology is consolidated in its own section further down.
 
 ### Layer 1 — Ingress: `enrollment.intake`
 
@@ -75,44 +105,45 @@ boundary.
 > correlation record and publishes `EnrollmentAccepted` inside the same `@Transactional` method. The intake queue and
 > its causal ordering guarantee are the planned target architecture.
 
-| Component            | Name                          | Type   | Durability |
-|----------------------|-------------------------------|--------|------------|
-| Exchange             | `enrollment.intake`           | Direct | Durable    |
-| Queue                | `enrollment.intake.queue`     | —      | Durable    |
-| Dead-letter exchange | `enrollment.intake.dlx`       | Direct | Durable    |
-| Dead-letter queue    | `enrollment.intake.queue.dlq` | —      | Durable    |
-
 Single publisher (`EnrollmentRequestPublisher`). Single consumer (`EnrollmentIntakeListener`, decision-engine).
 Point-to-point — no fan-out. This is the only entry point into the async pipeline.
 
 ### Layer 2 — Internal Pipeline: `enrollment.events`
 
-| Component            | Name                               | Type   | Durability |
-|----------------------|------------------------------------|--------|------------|
-| Exchange             | `enrollment.events`                | Topic  | Durable    |
-| Queue                | `geo.scoring.queue`                | —      | Durable    |
-| Queue                | `decision-engine.geo-score.queue`     | —      | Durable    |
-| Dead-letter exchange | `geo.scoring.dlx`                  | Direct | Durable    |
-| Dead-letter exchange | `decision-engine.geo-score.dlx`       | Direct | Durable    |
-| Dead-letter queue    | `geo.scoring.queue.dlq`            | —      | Durable    |
-| Dead-letter queue    | `decision-engine.geo-score.queue.dlq` | —      | Durable    |
-
-Multiple publishers (decision-engine, geo-scoring). Multiple consumers across services.
-Topic exchange routes by payment type and result type.
+Multiple publishers (decision-engine, geo-scoring, fraud-detection). Multiple consumers across services.
+Topic exchange routes by payment type (`enrollment.created.*`) on the trigger path and by result type
+(`geo.score.completed`, `fraud.score.completed`) on the return path.
 
 ### Layer 3 — Outbound: `enrollment.decisions`
 
 > **Not yet implemented.** `EnrollmentDecisionPublisher` currently publishes to `enrollment.events` with routing key
 > `enrollment.decision.completed`. The dedicated outbound exchange is the planned target architecture.
 
-| Component            | Name                                  | Type   | Durability |
-|----------------------|---------------------------------------|--------|------------|
-| Exchange             | `enrollment.decisions`                | Topic  | Durable    |
-| Queue                | `account-service.decisions.queue`     | —      | Durable    |
-| Dead-letter exchange | `enrollment.decisions.dlx`            | Direct | Durable    |
-| Dead-letter queue    | `account-service.decisions.queue.dlq` | —      | Durable    |
+Single publisher (`EnrollmentDecisionPublisher`, decision-engine). Consumed by the account service, which owns
+`account-service.decisions.queue` — its binding and DLX configuration are out of scope for this ADR.
 
-Single publisher (`EnrollmentDecisionPublisher`, decision-engine). Consumed by the account service.
+### Dead-letter topology
+
+Each consumer queue is paired with a dedicated direct DLX and DLQ. Naming follows the convention in the next
+section: `<queue>.dlq` for the dead-letter queue, `<service>.dlx` for its DLX. All entries below are durable.
+
+| Live queue                          | DLX                              | DLQ                                    | Owner            |
+|-------------------------------------|----------------------------------|----------------------------------------|------------------|
+| `enrollment.intake.queue`           | `enrollment.intake.dlx`          | `enrollment.intake.queue.dlq`          | decision-engine  |
+| `geo.scoring.queue`                 | `geo.scoring.dlx`                | `geo.scoring.queue.dlq`                | geo-scoring      |
+| `fraud.detection.queue` †           | `fraud.detection.dlx` †          | `fraud.detection.queue.dlq` †          | fraud-detection †|
+| `decision-engine.geo-score.queue`   | `decision-engine.geo-score.dlx`  | `decision-engine.geo-score.queue.dlq`  | decision-engine  |
+| `decision-engine.fraud-score.queue` †| `decision-engine.fraud-score.dlx` †| `decision-engine.fraud-score.queue.dlq` †| decision-engine †|
+| `account-service.decisions.queue`   | (owned by account-service)       | (owned by account-service)             | account-service *(out of scope)* |
+
+† **Not yet implemented in MVP 1.** Internal Fraud Detection runs as a stub that
+auto-emits `FraudCheckResult(OK)` (see §"Internal Fraud Detection" in
+`decision-engine/design.md`); the dedicated fraud worker queue, the
+decision-engine fraud-result listener queue, and their DLX/DLQ pairs are part
+of the target topology and will be declared when the stub is replaced by a
+real fraud service. Until then, fraud results flow through the stub's binding
+on `enrollment.events` and the decision-engine's existing listener
+infrastructure.
 
 ### Naming convention
 

@@ -229,6 +229,60 @@ Absent fields by design:
 - **No `decision_reason`.** The ADR-018 model captures decision drivers as the
   settled `signals` map on the decision event; no separate reason enum is kept.
 
+### Signal-map persistence pattern
+
+Updates to the `signals` JSONB column go through an explicit repository
+method that issues a literal SQL `UPDATE` — **not** via in-place mutation of
+a JPA-mapped `Map` field. This is a deliberate choice, not an oversight.
+
+```java
+// EnrollmentRepository
+@Modifying
+@Query(value = """
+        UPDATE enrollment_hub.enrollments
+           SET signals = CAST(:signalsJson AS jsonb)
+         WHERE request_id = :requestId
+        """, nativeQuery = true)
+int updateSignals(@Param("requestId") UUID requestId,
+                  @Param("signalsJson") String signalsJson);
+```
+
+**Why an explicit `UPDATE` instead of `entity.signals.put(…)` + dirty-tracking.**
+Hibernate *can* detect in-place mutations of JSON-mapped collections via
+deep-snapshot comparison at flush time, and on Hibernate 6.x with the current
+type-contributor wiring it does — empirically confirmed by
+`TransactionalRaceConditionIT`. But the detection depends on which
+`MutabilityPlan` / `JavaType` Hibernate resolves for
+`Map<SignalConfig, SignalState>`. That resolution is **not** part of the JPA
+contract; it varies across Hibernate versions, across changes in the
+type-contributor chain, and even across small changes to the field's declared
+static type. A future Hibernate upgrade — or someone refactoring the field
+from `Map<…>` to `EnumMap<…>` — could resolve to a shallow-copying
+`MutabilityPlan`. That would silently break persistence: no exception, no
+warning, no log, just an `UPDATE` that never fires and stale reads thereafter.
+
+The explicit `UPDATE` pattern removes that dependency:
+
+- The SQL statement *is* the persistence. Hibernate's dirty-tracking pipeline
+  is not involved for the `signals` column.
+- The row-count assertion (`expected == 1; throw otherwise`) turns a silent
+  failure mode into a loud one.
+- The statement still runs inside the same `@Transactional` boundary as the
+  rest of the result handler, preserving ADR-015's "all under one transaction"
+  prescription (pessimistic row lock, idempotency check, completion predicate,
+  publish — all in one commit window).
+
+Scalar columns on the same entity (`decision_result`, `decision_id`,
+`decided_at`) continue to use dirty-tracking — those are plain-typed JPA
+fields where Hibernate's dirty-checking semantics are stable across versions
+and unambiguous.
+
+> **Do not** "simplify" this back to `signals.put(...)` mutation under the
+> assumption that JPA dirty-tracking handles it. It does today, on this
+> Hibernate version, by accident-of-resolution rather than by contract. See
+> `notes/decision-engine-report.md` §M1 for the empirical proof, the failure
+> mode it protects against, and the full history.
+
 ### Correlation Record Domain Model
 
 The correlation record is modelled per ADR-018's Signal Classification Model. The

@@ -64,9 +64,12 @@ public class AmqpConfig {
     public static final String ROUTING_KEY_CREDIT_CARD = "enrollment.created.credit_card";
     public static final String ROUTING_KEY_INVOICE     = "enrollment.created.invoice";
 
-    // --- Geo-score result consumer topology ---
+    // --- Outbound decisions topology (ADR-003 §Layer 3) ---
 
+    public static final String DECISION_EXCHANGE    = "enrollment.decisions";
     public static final String DECISION_ROUTING_KEY = "enrollment.decision.completed";
+
+    // --- Geo-score result consumer topology ---
 
     static final String GEO_SCORE_QUEUE       = "decision-engine.geo-score.queue";
     static final String GEO_SCORE_ROUTING_KEY = "geo.score.completed";
@@ -87,10 +90,26 @@ public class AmqpConfig {
         };
     }
 
-    /** Durable topic exchange shared across all services. Declared idempotently at startup. */
+    /**
+     * Durable topic exchange for the internal scatter-gather pipeline (ADR-003 §Layer 2).
+     * Carries {@code EnrollmentAccepted} (intake-fan-out → signal workers) and signal-result
+     * events ({@code GeoScoreResult}, {@code FraudCheckResult}). Declared idempotently at startup.
+     * {@code EnrollmentDecisionEvent} does NOT flow on this exchange — see {@link #enrollmentDecisionsExchange()}.
+     */
     @Bean
     TopicExchange enrollmentExchange() {
         return ExchangeBuilder.topicExchange(EXCHANGE).durable(true).build();
+    }
+
+    /**
+     * Durable topic exchange for outbound decision events (ADR-003 §Layer 3). Single publisher:
+     * {@code EnrollmentDecisionPublisher}. Single consumer: the account service (which owns its
+     * own queue and binding — see ADR-003 §"Consumer-owned bindings"). Declared idempotently at
+     * startup; the binding from this exchange to the account-service queue is out of scope.
+     */
+    @Bean
+    TopicExchange enrollmentDecisionsExchange() {
+        return ExchangeBuilder.topicExchange(DECISION_EXCHANGE).durable(true).build();
     }
 
     /**
