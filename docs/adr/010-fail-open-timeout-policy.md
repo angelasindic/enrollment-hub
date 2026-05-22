@@ -121,6 +121,56 @@ significant rate, suggesting that signal-service degradation is being induced de
 such that verification failure during provider outages must not result in any approval for
 either route, requiring a queued-retry model rather than immediate rejection.
 
+## Lock semantics — `SKIP LOCKED` for the poller's claim, `WAIT` for handler coordination
+
+Option A above commits to row-level locking but is intentionally silent on the
+locking *variant*. There are two variants of `SELECT FOR UPDATE` in use on the
+correlation table, and they solve two different concurrency problems. The
+distinction is load-bearing for both correctness and horizontal scalability,
+so it gets its own decision.
+
+| Use case                                                        | Idiom                                            | Behaviour when the row is already locked                                                                                                                          | ADR  |
+|-----------------------------------------------------------------|--------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|------|
+| Result handler claims a specific `requestId` for read-modify-write | `PESSIMISTIC_WRITE` (plain — no skip)            | **WAIT** for the holder to commit; the second handler then re-reads the post-commit state and continues. Required because the two handlers process *different* signals on the *same* row, and the second handler must observe the first handler's settled signal before evaluating completion. | ADR-015 |
+| Timeout poller claims a batch of expired rows                   | `PESSIMISTIC_WRITE` + **`SKIP LOCKED`**         | **SKIP** the row this round. The holder is a result handler in mid-flight; it will settle the signal through its own path. The poller has no business serialising against it, and the same row will be claimable on the next poller tick if the handler hasn't settled it by then. | this ADR |
+
+### Why `SKIP LOCKED` for the poller specifically
+
+The poller is fundamentally a multi-worker work-distribution pattern, even when
+the deployment runs a single decision-engine instance:
+
+1. **Horizontal-scaling readiness.** At ≥2 decision-engine instances, two
+   pollers fire concurrently and call the same claim query at nearly the same
+   moment. Without `SKIP LOCKED`, the second poller blocks on the first
+   poller's row locks, serialising poller work back to single-instance
+   throughput — defeating the purpose of running multiple instances. With
+   `SKIP LOCKED`, the two pollers receive mutually disjoint claim sets and
+   make forward progress in parallel.
+2. **Poller-vs-handler interference.** Even at single-instance scale, the
+   poller and live result handlers compete for the same rows. A handler
+   holding `PESSIMISTIC_WRITE` on row X is about to settle the signal that
+   would otherwise time out; the poller stepping in to mark it FAILED would
+   either race the handler (without locking) or block the poller's entire
+   batch on one handler's transaction (with plain `PESSIMISTIC_WRITE`).
+   `SKIP LOCKED` resolves both: the poller skips row X this round, and either
+   the handler settles the signal (no timeout needed) or the next poller tick
+   finds row X unlocked and claims it normally.
+
+**Pattern reference.** Vlad Mihalcea, *Database job queue and `SKIP LOCKED`*
+(<https://vladmihalcea.com/database-job-queue-skip-locked/>) — describes the
+same idiom in PostgreSQL/Hibernate detail. The poller is precisely the
+"database job queue" shape: a table of pending work, multiple workers, each
+needs to claim a disjoint subset without contending on the rest.
+
+### Reversibility
+
+The two locking idioms are scoped to distinct call sites in the
+decision-engine. Replacing `SKIP LOCKED` on the poller path with optimistic
+locking or a CAS-based scheme is a single-call-site change and does not
+affect the handler-coordination path documented in ADR-015. The JPA
+implementation idiom and its regression test live in
+`decision-engine/design.md` §"Repository: two locking idioms".
+
 ## Consequences
 
 **Gains:** Timeout detection is fully observable — in-flight requests, timed-out signals,
