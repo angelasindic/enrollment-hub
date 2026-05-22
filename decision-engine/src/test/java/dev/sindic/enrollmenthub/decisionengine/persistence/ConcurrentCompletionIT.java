@@ -6,6 +6,8 @@ import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.json.JsonMapper;
+
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
@@ -18,11 +20,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Proves that {@code SELECT FOR UPDATE} (pessimistic write lock) serializes
  * concurrent result handlers on the same correlation row. Without the lock,
  * both handlers could read stale state and neither would detect completion.
+ *
+ * <p>Each handler follows the production flow per ADR-015 §Write path:
+ * lock with {@code findByRequestIdForUpdate}, compute the new signal map via
+ * the immutable domain transition, persist via {@code repository.updateSignals},
+ * and read the completion predicate off the just-computed state (not off the
+ * stale in-memory entity).
  */
 class ConcurrentCompletionIT extends BaseIntegrationTest {
 
     @Autowired EnrollmentRepository repository;
     @Autowired TransactionTemplate txTemplate;
+    @Autowired JsonMapper jsonMapper;
 
     @Test
     void concurrentHandlers_serializedByPessimisticLock_exactlyOneSeesCompletion() throws Exception {
@@ -32,10 +41,10 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
 
         var barrier = new CyclicBarrier(2);
 
-        var geoSawComplete  = new AtomicBoolean(false);
+        var geoSawComplete   = new AtomicBoolean(false);
         var fraudSawComplete = new AtomicBoolean(false);
-        var geoError        = new AtomicReference<Throwable>();
-        var fraudError      = new AtomicReference<Throwable>();
+        var geoError         = new AtomicReference<Throwable>();
+        var fraudError       = new AtomicReference<Throwable>();
 
         var geoThread = Thread.ofVirtual().name("geo-handler").start(() -> {
             try {
@@ -43,8 +52,10 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
                 txTemplate.executeWithoutResult(status -> {
                     var entity = repository.findByRequestIdForUpdate(requestId).orElseThrow();
                     sleep(200);
-                    entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
-                    geoSawComplete.set(entity.isComplete());
+                    var updated = entity.toDomainForDecision()
+                            .withSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
+                    repository.updateSignals(requestId, jsonMapper.writeValueAsString(updated.signals()));
+                    geoSawComplete.set(updated.isComplete());
                 });
             } catch (Throwable t) {
                 geoError.set(t);
@@ -57,8 +68,10 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
                 txTemplate.executeWithoutResult(status -> {
                     var entity = repository.findByRequestIdForUpdate(requestId).orElseThrow();
                     sleep(200);
-                    entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-                    fraudSawComplete.set(entity.isComplete());
+                    var updated = entity.toDomainForDecision()
+                            .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+                    repository.updateSignals(requestId, jsonMapper.writeValueAsString(updated.signals()));
+                    fraudSawComplete.set(updated.isComplete());
                 });
             } catch (Throwable t) {
                 fraudError.set(t);

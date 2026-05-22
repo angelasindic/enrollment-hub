@@ -2,7 +2,12 @@ package dev.sindic.enrollmenthub.decisionengine.service;
 
 import dev.sindic.enrollmenthub.contracts.events.EnrollmentDecisionEvent;
 import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentDecisionPublisher;
-import dev.sindic.enrollmenthub.decisionengine.domain.*;
+import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
+import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,13 +16,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.doThrow;
@@ -28,6 +38,7 @@ class EnrollmentServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-04-13T12:00:00Z");
     private static final Instant TIMEOUT = NOW.plusSeconds(60);
+    private static final Clock FIXED_CLOCK = Clock.fixed(Instant.parse("2026-04-13T12:00:42Z"), ZoneOffset.UTC);
 
     @Mock EnrollmentRepository repository;
     @Mock EnrollmentDecisionPublisher publisher;
@@ -36,90 +47,183 @@ class EnrollmentServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new EnrollmentService(repository, publisher,
-                tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build());
+        service = new EnrollmentService(
+                repository,
+                publisher,
+                tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build(),
+                FIXED_CLOCK);
     }
 
     @Test
-    void recordSignalResult_updatesEntityButDoesNotPublishWhenNotComplete() {
+    void recordSignalResult_writesJsonSignalsViaExplicitUpdate_whenNotComplete() {
+        // GIVEN a CREDIT_CARD entity in initial PENDING/PENDING state.
         var requestId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
+        given(repository.updateSignals(eq(requestId), anyString())).willReturn(1);
 
+        // WHEN geo settles HIGH (fraud is still PENDING — not yet complete).
         service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.HIGH));
 
-        assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                .isEqualTo(SignalProcessingState.SETTLED);
-        assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.HIGH);
+        // THEN the new signals JSON went to the explicit UPDATE; no decision recorded; no publish.
+        var jsonCaptor = ArgumentCaptor.forClass(String.class);
+        then(repository).should().updateSignals(eq(requestId), jsonCaptor.capture());
+        assertThat(jsonCaptor.getValue())
+                .as("explicit UPDATE carries the post-transition signal map")
+                .contains("\"GEO_SCORE\"")
+                .contains("\"SETTLED\"")
+                .contains("\"HIGH\"")
+                .contains("\"FRAUD_CHECK\"")
+                .contains("\"PENDING\"");
+        then(repository).should(never()).recordDecision(any(), any(), any(), any());
         then(publisher).should(never()).publish(any());
     }
 
     @Test
-    void recordSignalResult_completesAndPublishesDecision() {
+    void recordSignalResult_completesAndPublishesDecision_whenAllSignalsSettle() {
+        // GIVEN a CREDIT_CARD entity with FRAUD already settled OK.
         var requestId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
-        entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
+        given(repository.updateSignals(eq(requestId), anyString())).willReturn(1);
+        given(repository.recordDecision(eq(requestId), any(), any(), any())).willReturn(1);
 
+        // WHEN geo settles LOW — both signals now settled, decision fires.
         service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.LOW));
 
-        var captor = ArgumentCaptor.forClass(EnrollmentDecisionEvent.class);
-        then(publisher).should().publish(captor.capture());
+        // THEN signals UPDATE + decision UPDATE + publish.
+        then(repository).should().updateSignals(eq(requestId), anyString());
 
-        var event = captor.getValue();
-        assertThat(event.decisionId()).isNotNull();
+        var decisionResultCaptor = ArgumentCaptor.forClass(DecisionResult.class);
+        var decisionIdCaptor = ArgumentCaptor.forClass(UUID.class);
+        var decidedAtCaptor = ArgumentCaptor.forClass(Instant.class);
+        then(repository).should().recordDecision(
+                eq(requestId),
+                decisionResultCaptor.capture(),
+                decisionIdCaptor.capture(),
+                decidedAtCaptor.capture());
+        assertThat(decisionResultCaptor.getValue()).isEqualTo(DecisionResult.APPROVED);
+        assertThat(decisionIdCaptor.getValue()).isNotNull();
+        assertThat(decidedAtCaptor.getValue()).isEqualTo(FIXED_CLOCK.instant());
+
+        var eventCaptor = ArgumentCaptor.forClass(EnrollmentDecisionEvent.class);
+        then(publisher).should().publish(eventCaptor.capture());
+        var event = eventCaptor.getValue();
+        assertThat(event.decisionId()).isEqualTo(decisionIdCaptor.getValue());
+        assertThat(event.decidedAt()).isEqualTo(FIXED_CLOCK.instant());
         assertThat(event.decisionResult())
                 .isEqualTo(dev.sindic.enrollmenthub.contracts.events.DecisionResult.APPROVED);
         assertThat(event.signals().get("GEO_SCORE").riskLevel())
                 .isEqualTo(dev.sindic.enrollmenthub.contracts.events.RiskLevel.LOW);
         assertThat(event.signals().get("FRAUD_CHECK").outcome())
                 .isEqualTo(dev.sindic.enrollmenthub.contracts.events.SignalOutcome.OK);
-        assertThat(event.decidedAt()).isNotNull();
     }
 
     @Test
-    void recordSignalResult_idempotentDiscard() {
+    void recordSignalResult_idempotentDiscard_whenSignalAlreadySettled() {
         var requestId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
-        entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+        entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
 
         service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.HIGH));
 
-        assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.LOW);
+        // No write, no decision, no publish — silent idempotent return.
+        then(repository).should(never()).updateSignals(any(), any());
+        then(repository).should(never()).recordDecision(any(), any(), any(), any());
         then(publisher).should(never()).publish(any());
     }
 
     @Test
-    void recordSignalResult_unknownRequestIdThrowsUnknownCorrelation() {
+    void recordSignalResult_throwsUnknownCorrelation_whenRowDoesNotExist() {
         var requestId = UUID.randomUUID();
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.empty());
 
-        // Distinct exception type so the AMQP advice chain can mark it non-retryable
-        // (see AmqpConfig#listenerRetryPolicy). Asserting the concrete type, not
-        // just RuntimeException, is what couples this test to the retry policy contract.
         assertThatThrownBy(() -> service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.LOW)))
                 .isInstanceOf(UnknownCorrelationException.class)
                 .hasMessageContaining(requestId.toString());
 
+        then(repository).should(never()).updateSignals(any(), any());
         then(publisher).should(never()).publish(any());
     }
 
     @Test
-    void recordSignalResult_publisherFailurePropagates() {
+    void recordSignalResult_throwsWhenUpdateSignalsAffectsZeroRows() {
+        // Defensive: a row that exists at SELECT FOR UPDATE time but vanishes
+        // before the UPDATE is structurally impossible under our row lock —
+        // but the row-count assertion turns "impossible drift" into a loud
+        // failure rather than a silent missed write (ADR-015 §Write path).
         var requestId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
-        entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
+        given(repository.updateSignals(eq(requestId), anyString())).willReturn(0);
+
+        assertThatThrownBy(() -> service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
+                SignalState.settled(RiskLevel.LOW)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(requestId.toString())
+                .hasMessageContaining("0");
+
+        then(repository).should(never()).recordDecision(any(), any(), any(), any());
+        then(publisher).should(never()).publish(any());
+    }
+
+    @Test
+    void recordSignalResult_skipsPublishWhenRecordDecisionAffectsZeroRows() {
+        // Edge case: the recordDecision guard (decisionResult IS NULL) rejected
+        // the write, meaning a parallel path already recorded the decision.
+        // Under our PESSIMISTIC_WRITE lock this is structurally impossible,
+        // but if it does happen we must not double-publish.
+        var requestId = UUID.randomUUID();
+        var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+        given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
+        given(repository.updateSignals(eq(requestId), anyString())).willReturn(1);
+        given(repository.recordDecision(eq(requestId), any(), any(), any())).willReturn(0);
+
+        service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
+                SignalState.settled(RiskLevel.LOW));
+
+        then(publisher).should(never()).publish(any());
+    }
+
+    @Test
+    void recordSignalResult_propagatesPublisherFailure_soTxRollsBack() {
+        // Inside the @Transactional method a publisher exception rolls back the
+        // explicit UPDATEs we just issued — that's the ADR-015 contract.
+        var requestId = UUID.randomUUID();
+        var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+        given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
+        given(repository.updateSignals(eq(requestId), anyString())).willReturn(1);
+        given(repository.recordDecision(eq(requestId), any(), any(), any())).willReturn(1);
         doThrow(new RuntimeException("broker down")).when(publisher).publish(any());
 
         assertThatThrownBy(() -> service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.LOW)))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessage("broker down");
+    }
+
+    @Test
+    void recordSignalResult_treatsFailedSignalStateAsAlreadySettled() {
+        // A FAILED (timeout) signal is still "not PENDING" — the idempotency
+        // guard must skip the late-arriving result rather than overwrite.
+        var requestId = UUID.randomUUID();
+        var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
+        entity.getSignals().put(SignalConfig.GEO_SCORE,
+                new SignalState(SignalProcessingState.FAILED, null, null, "timeout"));
+        given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
+
+        service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
+                SignalState.settled(RiskLevel.LOW));
+
+        then(repository).should(never()).updateSignals(any(), any());
+        then(publisher).should(never()).publish(any());
     }
 }

@@ -79,67 +79,24 @@ class EnrollmentEntityTest {
         @Test
         void creditCardCompleteWhenBothSignalsSettle() {
             var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            // Direct map mutation is test-only state-setup; production code writes
+            // via repository.updateSignals (ADR-015 §Write path).
+            entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
             assertThat(entity.isComplete()).isTrue();
         }
 
         @Test
         void invoiceCompleteWhenFraudSettles() {
             var entity = TestEntityFactory.invoice(UUID.randomUUID(), NOW, TIMEOUT);
-            entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
             assertThat(entity.isComplete()).isTrue();
         }
     }
 
-    @Nested
-    class RecordSignalResult {
-
-        @Test
-        void updatesSignalState() {
-            var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            var applied = entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
-
-            assertThat(applied).isTrue();
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.HIGH);
-        }
-
-        @Test
-        void idempotentOnDuplicate() {
-            var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-
-            var applied = entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
-
-            assertThat(applied).isFalse();
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.LOW);
-        }
-    }
-
-    @Nested
-    class RecordDecision {
-
-        @Test
-        void setsDecisionResult() {
-            var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            var applied = entity.recordDecision(DecisionResult.APPROVED, NOW.plusSeconds(5));
-
-            assertThat(applied).isTrue();
-            assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
-            assertThat(entity.getDecidedAt()).isEqualTo(NOW.plusSeconds(5));
-        }
-
-        @Test
-        void idempotentIfAlreadyDecided() {
-            var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            entity.recordDecision(DecisionResult.APPROVED, NOW.plusSeconds(5));
-
-            var applied = entity.recordDecision(DecisionResult.REJECTED, NOW.plusSeconds(10));
-
-            assertThat(applied).isFalse();
-            assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
-        }
-    }
+    // Write-path semantics (idempotency guard, decision-already-recorded guard) live
+    // in the repository methods now (ADR-015 §Write path). See EnrollmentRepositoryIT$UpdateSignals
+    // and EnrollmentRepositoryIT$RecordDecisionMethod for the corresponding tests.
 
     @Nested
     class ToDomain {
