@@ -283,6 +283,57 @@ and unambiguous.
 > `notes/decision-engine-report.md` §M1 for the empirical proof, the failure
 > mode it protects against, and the full history.
 
+### Repository: two locking idioms
+
+The `EnrollmentRepository` exposes two methods that both take row-level locks
+but with **opposite** semantics. Both are intentional. Picking the wrong one
+for a given call site would either re-introduce the ADR-015 lost-update race
+(no lock) or undermine poller throughput (lock with WAIT instead of SKIP).
+The architectural rationale for choosing WAIT vs SKIP lives in
+ADR-010 §"Lock semantics"; this section covers the JPA implementation.
+
+```java
+// Specific-row coordination — WAIT for the holder to commit (ADR-015).
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+@Query("SELECT r FROM EnrollmentEntity r WHERE r.requestId = :requestId")
+Optional<EnrollmentEntity> findByRequestIdForUpdate(@Param("requestId") UUID requestId);
+
+// Job-queue claim — SKIP rows currently locked by anyone else (ADR-010).
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+@QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")})
+@Query("""
+        SELECT r FROM EnrollmentEntity r
+         WHERE r.timeoutAt <= :now
+           AND r.decisionResult IS NULL
+         ORDER BY r.timeoutAt ASC
+        """)
+List<EnrollmentEntity> claimPendingTimeouts(@Param("now") Instant now, Pageable pageable);
+```
+
+**Why the `"-2"` literal.** `@QueryHint(value = ...)` requires a compile-time
+`String` constant; the Jakarta Persistence sentinel for `SKIP LOCKED` is the
+integer `-2` (matching `org.hibernate.LockOptions.SKIP_LOCKED`). There is no
+way to reference the typed Hibernate constant from the annotation, so the
+literal appears in the source. The next paragraph explains how a future
+reader is protected from "simplifying" it.
+
+**Regression test.**
+`SkipLockedClaimIT.skipsRowsLockedByAnotherTransaction` pins the runtime
+behaviour empirically: it holds a `PESSIMISTIC_WRITE` on one row from a
+second thread and asserts the claim query returns only the *other* row. A
+`@Timeout` on the test method turns the regression "the hint was silently
+lost or its sentinel value changed" — which would otherwise manifest as
+the claim query blocking on the lock indefinitely — into a fast, loud test
+failure. If a future Hibernate major version reassigns the SKIP LOCKED
+sentinel or renames the hint property, this test catches it.
+
+> **Do not** add the `SKIP LOCKED` hint to `findByRequestIdForUpdate`.
+> Result handlers on the same row must serialise; ADR-015 §"Decision"
+> requires the second handler to observe the first handler's committed
+> state. `SKIP LOCKED` there would change the semantics from "wait" to
+> "return empty if locked," which would silently drop signal results that
+> arrived concurrently.
+
 ### Correlation Record Domain Model
 
 The correlation record is modelled per ADR-018's Signal Classification Model. The
