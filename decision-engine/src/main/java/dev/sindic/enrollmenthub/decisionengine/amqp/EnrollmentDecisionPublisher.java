@@ -8,8 +8,10 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Publishes {@link EnrollmentDecisionEvent} to the {@code enrollment.events}
- * topic exchange with routing key {@link AmqpConfig#DECISION_ROUTING_KEY}.
+ * Publishes {@link EnrollmentDecisionEvent} to the {@code enrollment.decisions}
+ * topic exchange (ADR-003 §Layer 3 — Outbound) with routing key
+ * {@link AmqpConfig#DECISION_ROUTING_KEY}. The decision-engine is the sole publisher
+ * on this exchange; the account-service owns the consumer queue and its binding.
  *
  * <p>Uses the channel-scoped {@code invoke + waitForConfirmsOrDie} pattern so
  * three failure modes all surface as exceptions to the caller:
@@ -19,6 +21,16 @@ import org.springframework.stereotype.Component;
  *       {@link AmqpException} after the wait.</li>
  *   <li><b>Serialization / connection errors</b> — propagate naturally.</li>
  * </ul>
+ *
+ * <p><b>Rollout caveat.</b> {@link AmqpConfig} sets {@code mandatory=true} on the
+ * {@link RabbitTemplate}: a publish to this exchange with no queue bound for the
+ * routing key will be returned by the broker and surface as an {@link AmqpException}
+ * from this method. The account-service team must declare a binding on
+ * {@link AmqpConfig#DECISION_EXCHANGE} for routing key
+ * {@link AmqpConfig#DECISION_ROUTING_KEY} before this publisher is exercised in
+ * production. The change must be coordinated; merging this without the downstream
+ * binding will cause every completed enrollment to fail the publish step and
+ * trigger redelivery loops until the binding lands.
  */
 @Slf4j
 @Component
@@ -36,7 +48,7 @@ public class EnrollmentDecisionPublisher {
         var correlation = new CorrelationData(event.decisionId().toString());
 
         rabbitTemplate.invoke(ops -> {
-            ops.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, event, correlation);
+            ops.convertAndSend(AmqpConfig.DECISION_EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, event, correlation);
             ops.waitForConfirmsOrDie(confirmTimeoutMillis);
             return Boolean.TRUE;
         });
