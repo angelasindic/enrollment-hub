@@ -98,10 +98,9 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
         UUID decided = UUID.randomUUID();
         txTemplate.executeWithoutResult(tx -> {
             repository.save(TestEntityFactory.creditCard(pending, CREATED_AT, EXPIRED_OLDER));
-
-            var decidedEntity = TestEntityFactory.creditCard(decided, CREATED_AT, EXPIRED_OLDER);
-            decidedEntity.recordDecision(DecisionResult.APPROVED, NOW.minusSeconds(5));
-            repository.save(decidedEntity);
+            repository.save(TestEntityFactory.creditCard(decided, CREATED_AT, EXPIRED_OLDER));
+            // Mark the second row as decided via the production write path (ADR-015 §Write path).
+            repository.recordDecision(decided, DecisionResult.APPROVED, UUID.randomUUID(), NOW.minusSeconds(5));
         });
 
         List<EnrollmentEntity> claimed = txTemplate.execute(tx ->

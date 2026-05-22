@@ -1,10 +1,12 @@
 package dev.sindic.enrollmenthub.decisionengine.persistence;
 
+import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
@@ -49,6 +51,54 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT r FROM EnrollmentEntity r WHERE r.requestId = :requestId")
     Optional<EnrollmentEntity> findByRequestIdForUpdate(@Param("requestId") UUID requestId);
+
+    /**
+     * Replaces the {@code signals} JSONB column with the given serialised value.
+     * Per ADR-015 §Write path, the JSON-mapped collection column is written via an explicit
+     * SQL {@code UPDATE} rather than via JPA dirty-tracking; the returned row
+     * count is the persistence guarantee.
+     *
+     * <p>Native query because PostgreSQL needs an explicit {@code ::jsonb} (or
+     * {@code CAST(… AS jsonb)}) on the bound text parameter; the JPQL layer
+     * does not expose a portable way to request that cast.
+     *
+     * @param requestId    target row PK
+     * @param signalsJson  serialised {@code Map<SignalConfig, SignalState>} —
+     *                     produced via the same {@code JsonMapper} the entity's
+     *                     {@code @JdbcTypeCode(SqlTypes.JSON)} uses on the read path
+     * @return number of rows updated; callers assert {@code == 1}
+     */
+    @Modifying
+    @Query(value = """
+            UPDATE enrollment_hub.enrollments
+               SET signals = CAST(:signalsJson AS jsonb)
+             WHERE request_id = :requestId
+            """, nativeQuery = true)
+    int updateSignals(@Param("requestId") UUID requestId,
+                      @Param("signalsJson") String signalsJson);
+
+    /**
+     * Records the final decision: sets {@code decisionResult}, {@code decisionId},
+     * and {@code decidedAt} in one statement, guarded by
+     * {@code decisionResult IS NULL} so a second caller cannot overwrite a
+     * decision that has already been recorded. Returns {@code 0} on that guard
+     * (caller skips the publish path) and {@code 1} on success.
+     *
+     * <p>JPQL (not native) — the columns are scalar, no JSONB cast required.
+     */
+    @Modifying
+    @Query("""
+            UPDATE EnrollmentEntity e
+               SET e.decisionResult = :decisionResult,
+                   e.decisionId     = :decisionId,
+                   e.decidedAt      = :decidedAt
+             WHERE e.requestId      = :requestId
+               AND e.decisionResult IS NULL
+            """)
+    int recordDecision(@Param("requestId") UUID requestId,
+                       @Param("decisionResult") DecisionResult decisionResult,
+                       @Param("decisionId") UUID decisionId,
+                       @Param("decidedAt") Instant decidedAt);
 
     /**
      * Atomically claims a batch of expired-and-undecided correlation rows for the

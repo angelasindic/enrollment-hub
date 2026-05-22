@@ -15,6 +15,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.json.JsonMapper;
+import java.util.EnumMap;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -38,6 +40,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
     @Autowired TransactionTemplate txTemplate;
     @Autowired AmqpAdmin amqpAdmin;
     @Autowired MeterRegistry meterRegistry;
+    @Autowired JsonMapper jsonMapper;
 
     @Test
     void handleGeoScoreResult_updatesCorrelationRecord() {
@@ -117,7 +120,11 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
         txTemplate.executeWithoutResult(status -> {
             var entity = repository.saveAndFlush(
                     TestEntityFactory.creditCard(requestId, Instant.now(), Instant.now().plusSeconds(60)));
-            entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            // Seed FRAUD_CHECK as already-settled via the production write path
+            // (ADR-015 §Write path). The incoming GeoScoreResult then completes the row.
+            var seedSignals = new EnumMap<>(entity.getSignals());
+            seedSignals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            repository.updateSignals(requestId, jsonMapper.writeValueAsString(seedSignals));
         });
 
         var event = new GeoScoreResult(

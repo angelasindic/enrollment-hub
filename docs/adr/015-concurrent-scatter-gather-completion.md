@@ -105,6 +105,51 @@ to this route) or already settled, the handler returns without mutation. A `fals
 indicates the signal has already been recorded — duplicate delivery or late arrival after
 timeout. The handler commits without triggering the decision engine.
 
+## Write path — explicit `UPDATE` for the JSON-mapped column
+
+The signal map is a `Map<SignalConfig, SignalState>` mapped to a PostgreSQL `jsonb`
+column via `@JdbcTypeCode(SqlTypes.JSON)`. Two ways to persist a mutation are available:
+
+1. **Dirty-tracked in-place mutation.** Load the entity, mutate the map field in
+   memory, rely on Hibernate's flush-time dirty-checker to compare against a
+   snapshot taken at load and issue an `UPDATE` if they differ.
+2. **Explicit `UPDATE`.** Compute the new value in application memory, issue a JPA
+   `UPDATE` statement that writes the column literally, assert the returned row count.
+
+**Decision:** option 2 for JSON-mapped collection columns. Scalar columns continue
+to use option 1 (dirty-tracking on scalar fields is stable across Hibernate versions
+and explicitly part of the JPA spec).
+
+**Why not dirty-tracking on the JSON column.** Option 1 works empirically today, but
+the mechanism that makes it work is *below* the JPA spec. Hibernate snapshots the
+field at load via a `MutabilityPlan` / `JavaType` resolved through its type-contributor
+chain. For a `Map<…, …>` field with `@JdbcTypeCode(SqlTypes.JSON)` and Jackson on the
+classpath, the resolved plan happens to deep-copy, so mutation is detectable at flush.
+The resolution is **not** part of the JPA contract and can shift across Hibernate
+minor versions, across changes in the type-contributor wiring, and across small
+refactors of the field's declared static type. A shift to a shallow-copying plan
+would silently break persistence: no exception, no log, just an `UPDATE` that never
+fires and stale reads thereafter. Scalar columns do not share this risk because their
+`MutabilityPlan` is stable and well-tested by the JPA TCK.
+
+**Solves:** silent persistence drift across Hibernate upgrades on the JSON column.
+Failure modes become loud (row-count assertion throws on unexpected outcomes).
+
+**Trade-off:** one dedicated repository method per JSON-collection write path; the
+entity loses its in-place mutator for those columns and becomes a read-only
+projection on the JSON side. The mutation is one extra explicit call instead of a
+hidden side-effect of `signals.put(...)` at flush — which is the property the
+decision optimises for.
+
+**Reversibility:** per call-site. Drop the repository `@Modifying` method, restore
+the entity's in-place mutator. Trigger to revisit: Hibernate evolving its
+`MutabilityPlan` guarantees for JSON-mapped collections into a stable, spec-level
+commitment.
+
+The JPA implementation idiom — the `@Modifying` annotation shape, the JSONB cast,
+the row-count assertion pattern, the regression test that pins the runtime behaviour
+— lives in `decision-engine/design.md` §"Signal-map persistence pattern".
+
 ## Consequences
 
 **Gains:** Completion predicate evaluated once, by the handler that observes the final

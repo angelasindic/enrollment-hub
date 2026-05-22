@@ -3,12 +3,18 @@ package dev.sindic.enrollmenthub.decisionengine.persistence;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
+
 import java.time.Instant;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -18,8 +24,9 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
     private static final Instant NOW = Instant.parse("2026-04-09T12:00:00Z");
     private static final Instant TIMEOUT = NOW.plusSeconds(60);
 
-    @Autowired
-    private EnrollmentRepository repository;
+    @Autowired private EnrollmentRepository repository;
+    @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private JsonMapper jsonMapper;
 
     @Nested
     class RoundTrip {
@@ -82,109 +89,118 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         }
     }
 
+    /** Repository-level write path for the signals JSONB column (ADR-015 §Write path). */
     @Nested
-    class RecordSignalResult {
+    class UpdateSignals {
 
-        private EnrollmentEntity entity;
+        @Test
+        @Transactional
+        void writesJsonbColumn_andReturnsOneRow() {
+            var requestId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
 
-        @BeforeEach
-        void setUp() {
-            entity = repository.saveAndFlush(
-                    TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT));
+            // Build a new signal map: GEO_SCORE settled HIGH; FRAUD_CHECK still PENDING.
+            var newSignals = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
+            newSignals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
+            var json = jsonMapper.writeValueAsString(newSignals);
+
+            int rows = repository.updateSignals(requestId, json);
+
+            assertThat(rows).isEqualTo(1);
+            assertSignalsRoundTrip(requestId, newSignals);
         }
 
         @Test
         @Transactional
-        void updatesGeoScoreAndReturnsTrue() {
-            boolean applied = entity.recordSignalResult(SignalConfig.GEO_SCORE,
-                    SignalState.settled(RiskLevel.LOW));
+        void returnsZero_whenRequestIdDoesNotExist() {
+            var json = jsonMapper.writeValueAsString(
+                    SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
 
-            assertThat(applied).isTrue();
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.LOW);
+            int rows = repository.updateSignals(UUID.randomUUID(), json);
+
+            assertThat(rows)
+                    .as("no row → row count is 0; caller asserts on this and throws")
+                    .isZero();
         }
 
         @Test
         @Transactional
-        void doesNotTouchOtherSignals() {
-            entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.MEDIUM));
+        void overwritesPreviousJsonbValue_completely() {
+            // Set initial state to one shape, then UPDATE to a different shape;
+            // verify the second shape replaces the first wholesale (not merged).
+            var requestId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
 
-            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
-        }
+            var firstWrite = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
+            firstWrite.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+            repository.updateSignals(requestId, jsonMapper.writeValueAsString(firstWrite));
 
-        @Test
-        @Transactional
-        void idempotentOnDuplicateDelivery() {
-            entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            boolean second = entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
+            var secondWrite = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
+            secondWrite.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            repository.updateSignals(requestId, jsonMapper.writeValueAsString(secondWrite));
 
-            assertThat(second).isFalse();
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.LOW);
-        }
-
-        @Test
-        @Transactional
-        void returnsFalseForAbsentSignal() {
-            // GEO_SCORE is absent on INVOICE route — recordSignalResult should return false
-            var invoiceEntity = repository.saveAndFlush(
-                    TestEntityFactory.invoice(UUID.randomUUID(), NOW, TIMEOUT));
-
-            boolean applied = invoiceEntity.recordSignalResult(SignalConfig.GEO_SCORE,
-                    SignalState.settled(RiskLevel.LOW));
-
-            assertThat(applied).isFalse();
-        }
-
-        @Test
-        @Transactional
-        void updatesFraudCheckAndReturnsTrue() {
-            boolean applied = entity.recordSignalResult(SignalConfig.FRAUD_CHECK,
-                    SignalState.settled(SignalOutcome.OK));
-
-            assertThat(applied).isTrue();
-            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).outcome()).isEqualTo(SignalOutcome.OK);
-        }
-
-        @Test
-        @Transactional
-        void fraudIdempotentOnDuplicateDelivery() {
-            entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-            boolean second = entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.FAILED));
-
-            assertThat(second).isFalse();
-            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).outcome()).isEqualTo(SignalOutcome.OK);
+            assertSignalsRoundTrip(requestId, secondWrite);
         }
     }
 
+    /** Repository-level write path for the scalar decision columns (ADR-015 §Write path symmetry). */
     @Nested
-    class RecordDecision {
+    class RecordDecisionMethod {
 
         @Test
         @Transactional
-        void recordsDecisionResultAndReturnsTrue() {
-            var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            repository.saveAndFlush(entity);
+        void persistsAllDecisionFields_andReturnsOneRow() {
+            var requestId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            var decisionId = UUID.randomUUID();
             var decidedAt = NOW.plusSeconds(5);
 
-            boolean applied = entity.recordDecision(DecisionResult.APPROVED, decidedAt);
+            int rows = repository.recordDecision(
+                    requestId, DecisionResult.APPROVED, decisionId, decidedAt);
 
-            assertThat(applied).isTrue();
-            assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
-            assertThat(entity.getDecidedAt()).isEqualTo(decidedAt);
+            assertThat(rows).isEqualTo(1);
+
+            // Fresh read via JdbcTemplate — the L1 cache has a stale loaded copy.
+            // JDBC maps TIMESTAMPTZ to java.sql.Timestamp; convert to Instant for comparison.
+            var row = jdbcTemplate.queryForMap(
+                    "SELECT decision_result, decision_id, decided_at " +
+                            "FROM enrollment_hub.enrollments WHERE request_id = ?",
+                    requestId);
+            assertThat(row.get("decision_result")).isEqualTo("APPROVED");
+            assertThat(row.get("decision_id")).isEqualTo(decisionId);
+            assertThat(((java.sql.Timestamp) row.get("decided_at")).toInstant()).isEqualTo(decidedAt);
         }
 
         @Test
         @Transactional
-        void idempotentWhenDecisionAlreadyRecorded() {
-            var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            repository.saveAndFlush(entity);
-            var decidedAt = NOW.plusSeconds(5);
+        void returnsZero_whenDecisionAlreadyRecorded_andDoesNotOverwrite() {
+            var requestId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            var firstDecisionId = UUID.randomUUID();
+            repository.recordDecision(requestId, DecisionResult.APPROVED, firstDecisionId, NOW.plusSeconds(5));
 
-            entity.recordDecision(DecisionResult.APPROVED, decidedAt);
-            boolean second = entity.recordDecision(DecisionResult.REJECTED, decidedAt);
+            int secondRows = repository.recordDecision(
+                    requestId, DecisionResult.REJECTED, UUID.randomUUID(), NOW.plusSeconds(10));
 
-            assertThat(second).isFalse();
-            assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
+            assertThat(secondRows)
+                    .as("guard: decisionResult IS NULL prevents a second write")
+                    .isZero();
+
+            // Confirm the first decision survived intact.
+            var row = jdbcTemplate.queryForMap(
+                    "SELECT decision_result, decision_id FROM enrollment_hub.enrollments WHERE request_id = ?",
+                    requestId);
+            assertThat(row.get("decision_result")).isEqualTo("APPROVED");
+            assertThat(row.get("decision_id")).isEqualTo(firstDecisionId);
+        }
+
+        @Test
+        @Transactional
+        void returnsZero_whenRequestIdDoesNotExist() {
+            int rows = repository.recordDecision(
+                    UUID.randomUUID(), DecisionResult.APPROVED, UUID.randomUUID(), NOW);
+
+            assertThat(rows).isZero();
         }
     }
 
@@ -217,12 +233,9 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void excludesFullySettledRequests() {
-            var entity = repository.saveAndFlush(
-                    TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT));
-            entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-            entity.recordDecision(DecisionResult.APPROVED, NOW.plusSeconds(5));
-            repository.flush();
+            var requestId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            repository.recordDecision(requestId, DecisionResult.APPROVED, UUID.randomUUID(), NOW.plusSeconds(5));
 
             var results = repository.findPendingTimeouts(TIMEOUT.plusSeconds(1));
 
@@ -237,10 +250,10 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Transactional
         void creditCardCompleteAfterBothSignalsSettle() {
             var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            repository.saveAndFlush(entity);
-
-            entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            // Direct map mutation here is test-only state-setup (analogous to a SQL
+            // INSERT in fixtures). Production code path writes via repository.updateSignals.
+            entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
 
             assertThat(entity.isComplete()).isTrue();
         }
@@ -249,9 +262,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Transactional
         void creditCardNotCompleteAfterGeoOnly() {
             var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            repository.saveAndFlush(entity);
-
-            entity.recordSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+            entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
 
             assertThat(entity.isComplete()).isFalse();
         }
@@ -260,11 +271,25 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Transactional
         void invoiceCompleteAfterFraudOnly() {
             var entity = TestEntityFactory.invoice(UUID.randomUUID(), NOW, TIMEOUT);
-            repository.saveAndFlush(entity);
-
-            entity.recordSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
 
             assertThat(entity.isComplete()).isTrue();
         }
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    private void assertSignalsRoundTrip(UUID requestId, Map<SignalConfig, SignalState> expected) {
+        var json = jdbcTemplate.queryForObject(
+                "SELECT signals::text FROM enrollment_hub.enrollments WHERE request_id = ?",
+                String.class, requestId);
+        assertThat(json).isNotNull();
+        Map<String, SignalState> actual =
+                jsonMapper.readValue(json, new TypeReference<HashMap<String, SignalState>>() {});
+        var expectedAsStringKeys = new HashMap<String, SignalState>();
+        expected.forEach((k, v) -> expectedAsStringKeys.put(k.name(), v));
+        assertThat(actual)
+                .as("the JSONB column contains exactly the map we wrote — no merge, no drift")
+                .containsExactlyInAnyOrderEntriesOf(expectedAsStringKeys);
     }
 }

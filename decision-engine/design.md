@@ -231,12 +231,14 @@ Absent fields by design:
 
 ### Signal-map persistence pattern
 
-Updates to the `signals` JSONB column go through an explicit repository
-method that issues a literal SQL `UPDATE` — **not** via in-place mutation of
-a JPA-mapped `Map` field. This is a deliberate choice, not an oversight.
+The `signals` JSONB column is written via explicit `UPDATE` statements
+issued through the repository — **not** via in-place mutation of a
+JPA-mapped `Map` field. The architectural rationale (and the failure mode
+this protects against) lives in **ADR-015 §"Write path — explicit `UPDATE`
+for the JSON-mapped column"**. This section covers the JPA implementation.
 
 ```java
-// EnrollmentRepository
+// EnrollmentRepository — write path for the JSONB column.
 @Modifying
 @Query(value = """
         UPDATE enrollment_hub.enrollments
@@ -245,43 +247,59 @@ a JPA-mapped `Map` field. This is a deliberate choice, not an oversight.
         """, nativeQuery = true)
 int updateSignals(@Param("requestId") UUID requestId,
                   @Param("signalsJson") String signalsJson);
+
+// Symmetric explicit write for the scalar decision columns. JPQL (not
+// native) — no JSONB cast required. The decisionResult-IS-NULL guard makes
+// the call idempotent at the SQL layer.
+@Modifying
+@Query("""
+        UPDATE EnrollmentEntity e
+           SET e.decisionResult = :decisionResult,
+               e.decisionId     = :decisionId,
+               e.decidedAt      = :decidedAt
+         WHERE e.requestId      = :requestId
+           AND e.decisionResult IS NULL
+        """)
+int recordDecision(@Param("requestId") UUID requestId,
+                   @Param("decisionResult") DecisionResult decisionResult,
+                   @Param("decisionId") UUID decisionId,
+                   @Param("decidedAt") Instant decidedAt);
 ```
 
-**Why an explicit `UPDATE` instead of `entity.signals.put(…)` + dirty-tracking.**
-Hibernate *can* detect in-place mutations of JSON-mapped collections via
-deep-snapshot comparison at flush time, and on Hibernate 6.x with the current
-type-contributor wiring it does — empirically confirmed by
-`TransactionalRaceConditionIT`. But the detection depends on which
-`MutabilityPlan` / `JavaType` Hibernate resolves for
-`Map<SignalConfig, SignalState>`. That resolution is **not** part of the JPA
-contract; it varies across Hibernate versions, across changes in the
-type-contributor chain, and even across small changes to the field's declared
-static type. A future Hibernate upgrade — or someone refactoring the field
-from `Map<…>` to `EnumMap<…>` — could resolve to a shallow-copying
-`MutabilityPlan`. That would silently break persistence: no exception, no
-warning, no log, just an `UPDATE` that never fires and stale reads thereafter.
+**Service flow.** The handler computes the new signal map via the immutable
+domain transition `EnrollmentProcess.withSignalResult(...)`, serialises it
+via the injected `JsonMapper`, and calls `updateSignals(...)` inside the
+same `@Transactional` boundary that holds the row lock from ADR-015. The
+returned row count is asserted to be `1`; any other value throws — the row
+not being present is structurally impossible because the load + lock at the
+top of the handler has already proven its existence. When the completion
+predicate fires, `recordDecision(...)` follows the same shape: row-count
+checked, mismatches handled (logged and the publish skipped — the guard
+implies another path already recorded the decision).
 
-The explicit `UPDATE` pattern removes that dependency:
+**Re-reading the entity after the UPDATE is unsupported.** Hibernate's L1
+cache still holds the loaded entity with its pre-UPDATE state; refreshing
+it would require an explicit `EntityManager.refresh(...)` and an extra
+round-trip. The service does not re-read — the new state is the
+application's input to the `UPDATE` and the canonical reference for the
+downstream `DecisionEventMapper`. This is the pattern callers follow
+elsewhere when adopting the convention.
 
-- The SQL statement *is* the persistence. Hibernate's dirty-tracking pipeline
-  is not involved for the `signals` column.
-- The row-count assertion (`expected == 1; throw otherwise`) turns a silent
-  failure mode into a loud one.
-- The statement still runs inside the same `@Transactional` boundary as the
-  rest of the result handler, preserving ADR-015's "all under one transaction"
-  prescription (pessimistic row lock, idempotency check, completion predicate,
-  publish — all in one commit window).
-
-Scalar columns on the same entity (`decision_result`, `decision_id`,
-`decided_at`) continue to use dirty-tracking — those are plain-typed JPA
-fields where Hibernate's dirty-checking semantics are stable across versions
-and unambiguous.
+**Regression test.** `EnrollmentRepositoryIT$UpdateSignals` round-trips the
+column through real PostgreSQL: write a map via `updateSignals(...)`, read
+the raw JSONB back via JdbcTemplate, deserialise, assert structure equality.
+A second test verifies that a follow-up UPDATE **replaces** the previous
+JSON wholesale rather than merging — important because a `jsonb_set`-style
+partial update would be a different operation with different concurrency
+semantics. The companion test for `recordDecision` proves the
+`decisionResult IS NULL` guard prevents a second write from overwriting an
+existing decision.
 
 > **Do not** "simplify" this back to `signals.put(...)` mutation under the
 > assumption that JPA dirty-tracking handles it. It does today, on this
-> Hibernate version, by accident-of-resolution rather than by contract. See
-> `notes/decision-engine-report.md` §M1 for the empirical proof, the failure
-> mode it protects against, and the full history.
+> Hibernate version, by `MutabilityPlan` resolution rather than by JPA
+> contract — see ADR-015 §Write path for the full rationale and the failure mode that
+> the explicit `UPDATE` protects against.
 
 ### Repository: two locking idioms
 

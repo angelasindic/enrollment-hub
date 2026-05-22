@@ -6,13 +6,30 @@ import dev.sindic.enrollmenthub.contracts.events.EnrollmentDecisionEvent;
 import dev.sindic.enrollmenthub.contracts.events.EnrollmentSignal;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
 import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentDecisionResult;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Instant;
 import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 
+/**
+ * Builds the outbound {@link EnrollmentDecisionEvent} from the just-decided
+ * state.
+ *
+ * <p>Inputs are passed in explicitly (signals map, decision, decisionId,
+ * decidedAt) rather than read from the entity, because the entity's
+ * in-memory state is stale relative to the JSON-column {@code UPDATE} the
+ * service issued moments earlier (ADR-015 §Write path: explicit {@code UPDATE} for the
+ * {@code signals} column; the loaded entity is not refreshed). The entity is
+ * still the source of truth for fields this service path did not write — the
+ * immutable {@code original_request} column.
+ */
 final class DecisionEventMapper {
 
     private final JsonMapper jsonMapper;
@@ -21,17 +38,23 @@ final class DecisionEventMapper {
         this.jsonMapper = jsonMapper;
     }
 
-    EnrollmentDecisionEvent buildDecisionEvent(EnrollmentEntity entity) {
-        var signals = new HashMap<String, EnrollmentSignal>();
-        for (var entry : entity.getSignals().entrySet()) {
-            signals.put(entry.getKey().name(), toContractSignal(entry.getValue()));
+    EnrollmentDecisionEvent buildDecisionEvent(
+            EnrollmentEntity entity,
+            Map<SignalConfig, SignalState> signals,
+            EnrollmentDecisionResult decision,
+            UUID decisionId,
+            Instant decidedAt) {
+
+        var contractSignals = new HashMap<String, EnrollmentSignal>();
+        for (var entry : signals.entrySet()) {
+            contractSignals.put(entry.getKey().name(), toContractSignal(entry.getValue()));
         }
         return new EnrollmentDecisionEvent(
-                entity.getDecisionId(),
+                decisionId,
                 jsonMapper.readValue(entity.getOriginalRequest(), EnrollmentData.class),
-                DecisionResult.valueOf(entity.getDecisionResult().name()),
-                signals,
-                entity.getDecidedAt());
+                DecisionResult.valueOf(decision.decision().name()),
+                contractSignals,
+                decidedAt);
     }
 
     private static EnrollmentSignal toContractSignal(SignalState state) {
