@@ -20,20 +20,6 @@ class EnrollmentRequestTest {
     }
 
     @Test
-    void mapsOneToOneOntoEnrollmentData() {
-        EnrollmentRequest req = new EnrollmentRequest(
-                PaymentType.CREDIT_CARD, person(), address("DE"), address("AT"));
-
-        EnrollmentData data = req.toEnrollmentData();
-
-        assertThat(data.paymentType()).isEqualTo(PaymentType.CREDIT_CARD);
-        assertThat(data.person().emailAddress()).isEqualTo("ada@example.com");
-        assertThat(data.shippingAddress().countryCode()).isEqualTo("DE");
-        assertThat(data.billingAddress().countryCode()).isEqualTo("AT");
-        assertThat(data.shippingAddress().streetLines()).containsExactly("1 Main St");
-    }
-
-    @Test
     void nullStreetLinesBecomesEmpty() {
         EnrollmentRequest.AddressDto a = new EnrollmentRequest.AddressDto(
                 null, "10115", "Berlin", "BE", "DE");

@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.util.EnumMap;
 import java.util.UUID;
 
 /**
@@ -37,7 +38,7 @@ import java.util.UUID;
  * still-PENDING. Downstream consumers handle the at-least-once delivery
  * window via {@code decisionId} dedup (ADR-003 §Delivery Guarantees).
  *
- * @see CreateEnrollmentService synchronous intake counterpart
+ * @see EnrollmentIntakeService synchronous intake counterpart
  */
 @Service
 @Slf4j
@@ -73,36 +74,39 @@ public class EnrollmentService {
         }
 
         // Compute the new signal map via the immutable domain transition.
-        var updated = entity.toDomainForDecision().withSignalResult(signal, newState);
+        var updatedSignals = new EnumMap<>(entity.getSignals());
+        updatedSignals.put(signal, newState);
+        var signalsJson = jsonMapper.writeValueAsString(updatedSignals);
 
-        // Persist via explicit UPDATE (ADR-015 §Write path). The row-count assertion turns
-        // a silent persistence drift into a loud failure.
-        int signalRows = repository.updateSignals(requestId, jsonMapper.writeValueAsString(updated.signals()));
-        if (signalRows != 1) {
-            throw new IllegalStateException(
-                    "updateSignals affected " + signalRows + " rows for requestId=" + requestId);
-        }
-
-        if (!updated.isComplete()) {
+        // Branch on whether this transition completes the process so we can
+        // collapse the signal-update and decision-record into a single UPDATE
+        // on the completion path. Avoids the intermediate row state where all
+        // signals are settled but the decision column is still NULL.
+        if (!SignalConfig.allSettled(updatedSignals)) {
+            int rows = repository.updateSignals(requestId, signalsJson);
+            if (rows != 1) {
+                throw new IllegalStateException(
+                        "updateSignals affected " + rows + " rows for requestId=" + requestId);
+            }
             return;
         }
 
-        // Evaluate, persist decision fields via explicit UPDATE, publish.
-        var decision = DecisionEngine.evaluate(updated);
+        var decision = DecisionEngine.evaluate(updatedSignals, requestId);
         var decisionId = UUID.randomUUID();
         var decidedAt = clock.instant();
 
-        int decisionRows = repository.recordDecision(requestId, decision.decision(), decisionId, decidedAt);
-        if (decisionRows != 1) {
-            // The recordDecision guard (decisionResult IS NULL) rejected the write.
-            // Under the row lock we hold this is structurally impossible, but if it
-            // happens we must not publish — another path has already published.
-            log.warn("recordDecision affected {} rows for requestId={}; decision not published",
-                    decisionRows, requestId);
+        int rows = repository.completeWithDecision(
+                requestId, signalsJson, decision.decision().name(), decisionId, decidedAt);
+        if (rows != 1) {
+            // The decision_result IS NULL guard rejected — another path already
+            // completed under our lock (structurally impossible, but if it
+            // happens we must not double-publish).
+            log.warn("completeWithDecision affected {} rows for requestId={}; decision not published",
+                    rows, requestId);
             return;
         }
 
         publisher.publish(decisionEventMapper.buildDecisionEvent(
-                entity, updated.signals(), decision, decisionId, decidedAt));
+                entity, updatedSignals, decision, decisionId, decidedAt));
     }
 }

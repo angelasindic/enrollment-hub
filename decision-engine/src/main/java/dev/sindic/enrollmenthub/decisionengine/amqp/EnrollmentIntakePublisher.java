@@ -8,8 +8,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Publishes {@link EnrollmentEvent} events to the {@code enrollment.events}
- * topic exchange, routing by payment type (see {@link AmqpConfig#routingKeyFor}).
+ *
+ * Publishes {@link EnrollmentEvent} events to the {@code enrollment.intakw} direct exchange.
  *
  * <p>Uses the channel-scoped {@code invoke + waitForConfirmsOrDie} pattern so
  * three failure modes all surface as exceptions to the caller:
@@ -25,12 +25,11 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
-public class EnrollmentAcceptedPublisher {
-
+public class EnrollmentIntakePublisher {
     private final RabbitTemplate rabbitTemplate;
     private final long confirmTimeoutMillis;
 
-    EnrollmentAcceptedPublisher(RabbitTemplate rabbitTemplate, AmqpProperties amqpProperties) {
+    EnrollmentIntakePublisher(RabbitTemplate rabbitTemplate, AmqpProperties amqpProperties) {
         this.rabbitTemplate = rabbitTemplate;
         this.confirmTimeoutMillis = amqpProperties.confirmTimeout().toMillis();
     }
@@ -40,7 +39,7 @@ public class EnrollmentAcceptedPublisher {
         var correlation = new CorrelationData(event.enrollmentId());
 
         rabbitTemplate.invoke(ops -> {
-            ops.convertAndSend(AmqpConfig.EXCHANGE, routingKey, event, correlation);
+            ops.convertAndSend(AmqpConfig.ENROLLMENT_INTAKE_EXCHANGE, routingKey, event, correlation);
             ops.waitForConfirmsOrDie(confirmTimeoutMillis);
             return Boolean.TRUE;
         });
@@ -48,11 +47,12 @@ public class EnrollmentAcceptedPublisher {
         var returned = correlation.getReturned();
         if (returned != null) {
             throw new AmqpException(
-                    "EnrollmentAccepted unroutable: exchange=" + returned.getExchange()
+                    "Enrollment intake unroutable: exchange=" + returned.getExchange()
                             + " routingKey=" + returned.getRoutingKey()
                             + " replyText=" + returned.getReplyText());
         }
-        log.info("Published enrollmentAccepted enrollmentId={} routingKey={}",
+        log.info("Published enrollment intake with enrollmentId={} routingKey={}",
                 event.enrollmentId(), routingKey);
     }
+
 }

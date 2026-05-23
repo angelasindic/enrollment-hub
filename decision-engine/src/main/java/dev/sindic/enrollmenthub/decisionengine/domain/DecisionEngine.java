@@ -1,6 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine.domain;
 
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Aggregates settled signals from a completed {@link EnrollmentProcess} into a
@@ -44,22 +45,23 @@ public final class DecisionEngine {
     private DecisionEngine() {}
 
     /**
-     * Evaluates the given process and returns a decision.
+     * Evaluates the given signal map and returns a decision.
      *
-     * @throws IllegalStateException            if the process is not yet complete
-     *                                          (completion predicate returned false)
+     * @throws IllegalStateException            if any signal is still
+     *                                          {@link SignalProcessingState#PENDING}
      * @throws AggregationPreconditionException if a signal is still
      *                                          {@link SignalProcessingState#PENDING}
      *                                          when aggregation runs — indicates a bug
      *                                          in the completion predicate
      */
-    public static EnrollmentDecisionResult evaluate(EnrollmentProcess process) {
-        if (!process.isComplete()) {
+    public static EnrollmentDecisionResult evaluate(Map<SignalConfig, SignalState> signals, UUID requestId) {
+        if (!SignalConfig.allSettled(signals)) {
             throw new IllegalStateException(
-                    "Cannot evaluate incomplete process " + process.requestId());
+                    "Cannot evaluate incomplete process " + requestId);
         }
-        return new EnrollmentDecisionResult(aggregate(process.signals()));
+        return new EnrollmentDecisionResult(aggregate(signals));
     }
+
 
     /**
      * Package-private to allow direct testing of the

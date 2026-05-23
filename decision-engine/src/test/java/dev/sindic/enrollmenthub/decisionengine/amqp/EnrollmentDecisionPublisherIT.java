@@ -122,7 +122,7 @@ class EnrollmentDecisionPublisherIT extends BaseIntegrationTest {
     private static EnrollmentDecisionEvent sampleDecisionEvent() {
         var person  = new Person("Ada", "Lovelace", "ada@example.com", "+49123");
         var address = new Address(List.of("1 Main St"), "10115", "Berlin", "BE", "DE");
-        var data    = new EnrollmentData(PaymentType.CREDIT_CARD, person, address, address);
+        var data    = new EnrollmentData(UUID.randomUUID(), PaymentType.CREDIT_CARD, person, address, address);
 
         return new EnrollmentDecisionEvent(
                 UUID.randomUUID(),

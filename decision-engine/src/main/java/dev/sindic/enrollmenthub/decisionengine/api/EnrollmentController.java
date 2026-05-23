@@ -3,9 +3,8 @@ package dev.sindic.enrollmenthub.decisionengine.api;
 import dev.sindic.enrollmenthub.decisionengine.domain.Address;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
-import dev.sindic.enrollmenthub.decisionengine.domain.PendingEnrollmentResponse;
 import dev.sindic.enrollmenthub.decisionengine.domain.Person;
-import dev.sindic.enrollmenthub.decisionengine.service.CreateEnrollmentService;
+import dev.sindic.enrollmenthub.decisionengine.service.EnrollmentIntakeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -21,6 +20,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.UUID;
 
 /**
  * Entry point for the enrollment flow.
@@ -38,7 +39,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class EnrollmentController {
 
-    private final CreateEnrollmentService enrollmentService;
+    private final EnrollmentIntakeService enrollmentService;
 
     @PostMapping
     @Operation(
@@ -79,11 +80,14 @@ public class EnrollmentController {
             })
     public ResponseEntity<EnrollmentResponse> createEnrollment(@Valid @RequestBody EnrollmentRequest request) {
         return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(mapResponse(enrollmentService.createEnrollment(mapRequest(request))));
+                .body(new EnrollmentResponse(
+                        enrollmentService.receiveEnrollment(createDomainRequest(request)).enrollmentId())
+                );
     }
 
-    EnrollmentCommand mapRequest(EnrollmentRequest request) {
+    EnrollmentCommand createDomainRequest(EnrollmentRequest request) {
         return new EnrollmentCommand(
+                UUID.randomUUID(),
                 PaymentType.valueOf(request.paymentType().name()),
                 toPerson(request.person()),
                 toAddress(request.shippingAddress()),
@@ -97,12 +101,5 @@ public class EnrollmentController {
 
     private static Address toAddress(EnrollmentRequest.AddressDto dto) {
         return new Address(dto.streetLines(), dto.postalCode(), dto.city(), dto.subregion(), dto.countryCode());
-    }
-
-    EnrollmentResponse mapResponse(PendingEnrollmentResponse pendingResponse) {
-        return new EnrollmentResponse(
-                pendingResponse.requestId(),
-                EnrollmentResponse.Status.valueOf(pendingResponse.status().name())
-        );
     }
 }

@@ -101,12 +101,11 @@ the diagram. Dead-letter topology is consolidated in its own section further dow
 
 ### Layer 1 — Ingress: `enrollment.intake`
 
-> **Not yet implemented.** The REST endpoint currently calls `CreateEnrollmentService` directly, which creates the
-> correlation record and publishes `EnrollmentAccepted` inside the same `@Transactional` method. The intake queue and
-> its causal ordering guarantee are the planned target architecture.
-
-Single publisher (`EnrollmentRequestPublisher`). Single consumer (`EnrollmentIntakeListener`, decision-engine).
-Point-to-point — no fan-out. This is the only entry point into the async pipeline.
+Single publisher (`EnrollmentIntakePublisher`, invoked from
+`CreateEnrollmentService.receiveEnrollment`). Single consumer
+(`EnrollmentIntakeListener`, decision-engine), bound on
+`enrollment.created.*` so both payment routes share the queue. No fan-out:
+this is the only entry point into the async pipeline.
 
 ### Layer 2 — Internal Pipeline: `enrollment.events`
 
@@ -165,23 +164,29 @@ The pipeline entry point and the internal routing strategy are described as thre
 
 ### Step 0 — Intake (entry-point ordering guarantee)
 
-> **Not yet implemented** — see Layer 1 note above.
+The REST endpoint publishes an `EnrollmentEvent` to `enrollment.intake`
+(topic exchange, single-queue topology). Publisher Confirms with
+`mandatory=true` ensure the 202 response is returned only after the broker
+has accepted and bound-routed the message; an unroutable publish surfaces
+as `AmqpException` to the client.
 
-The REST endpoint publishes `EnrollmentAccepted` to `enrollment.intake` (Direct exchange). The intake queue delivers it
-exclusively to `EnrollmentIntakeListener` in the decision-engine. No check service has any binding to this exchange — it
-is a point-to-point channel between the API boundary and the decision-engine.
+`EnrollmentIntakeListener` consumes from the intake queue and delegates to
+`CreateEnrollmentService.processEnrollment`, a separate `@Transactional`
+bean. The cross-bean call crosses the Spring AOP proxy boundary so the
+transaction is honoured. The handler:
 
-`EnrollmentIntakeListener` is the **only component that creates correlation records**. Its responsibility:
-
-1. `BEGIN` transaction.
+1. `BEGIN` transaction (`@Transactional` on `processEnrollment`).
 2. `INSERT` correlation record into PostgreSQL.
-3. `COMMIT`.
-4. In the `afterCommit` hook: publish `EnrollmentAccepted` to `enrollment.events`.
-5. `ACK` the intake message only after the publish succeeds.
+3. Publish `EnrollmentEvent` to `enrollment.events` (still inside the tx).
+4. `COMMIT`.
+5. `ACK` the intake message — automatic on listener-method success under
+   `AcknowledgeMode.AUTO`.
 
-This sequence is the causal ordering guarantee: no consumer on `enrollment.events` can receive `EnrollmentAccepted`
-for a correlation record that has not yet committed. The initialization race (check service result arriving before the
-correlation row is visible) is eliminated by construction.
+This sequence is the causal ordering guarantee: no consumer on
+`enrollment.events` can receive a request for a correlation record that has
+not yet committed, because the publish is inside the same transaction as the
+INSERT (ADR-015 §Decision; see also that ADR for the publish-before-commit
+edge case and the downstream `enrollmentId` dedup that mitigates it).
 
 The intake message stays unACKed until the `afterCommit` publish completes. If the decision-engine crashes between step 3
 and step 5, the broker redelivers the intake message on restart. The correlation `INSERT` uses a unique constraint on

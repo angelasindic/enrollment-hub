@@ -2,6 +2,7 @@ package dev.sindic.enrollmenthub.decisionengine.persistence;
 
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import jakarta.persistence.*;
+import lombok.Getter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import java.time.Instant;
@@ -13,8 +14,9 @@ import java.util.UUID;
  * JPA entity for the {@code enrollment_hub.enrollments} correlation table.
  *
  * <p>Read-only projection. All writes go through {@link EnrollmentRepository}:
- * the {@code signals} JSONB column via {@code updateSignals(...)} per ADR-015 §Write path,
- * and the scalar decision columns via {@code recordDecision(...)} for symmetry.
+ * partial transitions through {@code updateSignals(...)} (signals-only UPDATE)
+ * and the terminal transition through {@code completeWithDecision(...)}
+ * (signals + decision columns in one UPDATE) per ADR-015 §Write path.
  * The in-memory copy of an entity that the service path loaded is intentionally
  * not re-read after those updates — the new state is the application's input
  * to the {@code UPDATE}, not a value to be re-fetched.
@@ -97,7 +99,8 @@ public class EnrollmentEntity {
     }
 
     public EnrollmentProcess toDomainForDecision() {
-        return toDomain(new EnrollmentCommand(paymentType, null, null, null));
+        // this has to be refactored!!!!!
+        return toDomain(new EnrollmentCommand(UUID.randomUUID(), paymentType, null, null, null));
     }
 
     public EnrollmentProcess toDomain(EnrollmentCommand command) {

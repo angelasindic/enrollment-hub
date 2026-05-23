@@ -127,14 +127,14 @@ class EnrollmentEntityTest {
     }
 
     private static EnrollmentCommand creditCardCommand() {
-        return new EnrollmentCommand(PaymentType.CREDIT_CARD,
+        return new EnrollmentCommand(UUID.randomUUID(), PaymentType.CREDIT_CARD,
                 new Person("Ada", "Lovelace", "ada@example.com", "+49123"),
                 new Address(List.of("1 Main St"), "10115", "Berlin", "BE", "DE"),
                 new Address(List.of("1 Main St"), "10115", "Berlin", "BE", "DE"));
     }
 
     private static EnrollmentCommand invoiceCommand() {
-        return new EnrollmentCommand(PaymentType.INVOICE,
+        return new EnrollmentCommand(UUID.randomUUID(), PaymentType.INVOICE,
                 new Person("Ada", "Lovelace", "ada@example.com", "+49123"),
                 new Address(List.of("1 Main St"), "10115", "Berlin", "BE", "DE"),
                 new Address(List.of("1 Main St"), "10115", "Berlin", "BE", "DE"));
