@@ -13,12 +13,12 @@ import java.util.UUID;
  * <p>
  *
  * @param enrollmentId server-minted correlation id; the same value used as
- *                  {@code requestId} on every downstream event for this request
+ *                  {@code enrollmentId} on every downstream event for this request
  */
 public record EnrollmentResponse(String enrollmentId) {
 
     public EnrollmentResponse {
-        Objects.requireNonNull(enrollmentId, "requestId must not be null");
+        Objects.requireNonNull(enrollmentId, "enrollmentId must not be null");
     }
 
 }

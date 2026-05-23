@@ -160,4 +160,4 @@ existing `SELECT FOR UPDATE` pattern already established for the timeout poller 
 **Loses:** Each result handler holds a row lock for the duration of its transaction.
 Under the current volume envelope this is negligible. A pathological slow DB write or
 network partition during a locked transaction delays all concurrent handlers for that
-`requestId`.
+`enrollmentId`.

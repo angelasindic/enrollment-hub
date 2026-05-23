@@ -102,7 +102,7 @@ the diagram. Dead-letter topology is consolidated in its own section further dow
 ### Layer 1 — Ingress: `enrollment.intake`
 
 Single publisher (`EnrollmentIntakePublisher`, invoked from
-`CreateEnrollmentService.receiveEnrollment`). Single consumer
+`EnrollmentIntakeService.receiveEnrollment`). Single consumer
 (`EnrollmentIntakeListener`, decision-engine), bound on
 `enrollment.created.*` so both payment routes share the queue. No fan-out:
 this is the only entry point into the async pipeline.
@@ -171,7 +171,7 @@ has accepted and bound-routed the message; an unroutable publish surfaces
 as `AmqpException` to the client.
 
 `EnrollmentIntakeListener` consumes from the intake queue and delegates to
-`CreateEnrollmentService.processEnrollment`, a separate `@Transactional`
+`EnrollmentIntakeService.processEnrollment`, a separate `@Transactional`
 bean. The cross-bean call crosses the Spring AOP proxy boundary so the
 transaction is honoured. The handler:
 
@@ -190,7 +190,7 @@ edge case and the downstream `enrollmentId` dedup that mitigates it).
 
 The intake message stays unACKed until the `afterCommit` publish completes. If the decision-engine crashes between step 3
 and step 5, the broker redelivers the intake message on restart. The correlation `INSERT` uses a unique constraint on
-`requestId` to absorb the redelivery idempotently — the second INSERT fails silently and the `afterCommit` publish
+`enrollmentId` to absorb the redelivery idempotently — the second INSERT fails silently and the `afterCommit` publish
 fires again. No outbox table or relay poller is required; the broker's at-least-once redelivery is the crash-recovery
 mechanism.
 
@@ -258,10 +258,10 @@ natural key.
 
 | Event                       | Dedup key                                                           |
 |-----------------------------|---------------------------------------------------------------------|
-| `EnrollmentAccepted`        | `requestId` — unique constraint on `enrollments.request_id`         |
-| `GeoScoreResult`            | `requestId` — idempotency guard on the correlation row's signal slot |
-| `FraudCheckResult`          | `requestId` — idempotency guard on the correlation row's signal slot |
-| `IdentityCheckResult`       | `requestId` — idempotency guard on the correlation row's signal slot |
+| `EnrollmentAccepted`        | `enrollmentId` — unique constraint on `enrollments.enrollment_id`         |
+| `GeoScoreResult`            | `enrollmentId` — idempotency guard on the correlation row's signal slot |
+| `FraudCheckResult`          | `enrollmentId` — idempotency guard on the correlation row's signal slot |
+| `IdentityCheckResult`       | `enrollmentId` — idempotency guard on the correlation row's signal slot |
 | `EnrollmentDecisionEvent`   | `decisionId` — dedup on the account service's received-events table  |
 
 ### Publisher-side failure modes covered

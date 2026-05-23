@@ -34,13 +34,13 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void persistsAndRetrievesCreditCardEntity() {
-            var requestId = UUID.randomUUID();
-            var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
+            var enrollmentId = UUID.randomUUID();
+            var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
 
             repository.saveAndFlush(entity);
-            var loaded = repository.findById(requestId).orElseThrow();
+            var loaded = repository.findById(enrollmentId).orElseThrow();
 
-            assertThat(loaded.getRequestId()).isEqualTo(requestId);
+            assertThat(loaded.getEnrollmentId()).isEqualTo(enrollmentId);
             assertThat(loaded.getPaymentType()).isEqualTo(PaymentType.CREDIT_CARD);
             assertThat(loaded.getSignals()).containsOnlyKeys(SignalConfig.GEO_SCORE, SignalConfig.FRAUD_CHECK);
             assertThat(loaded.getSignals().get(SignalConfig.GEO_SCORE).processingState())
@@ -54,11 +54,11 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void persistsAndRetrievesInvoiceEntity() {
-            var requestId = UUID.randomUUID();
-            var entity = TestEntityFactory.invoice(requestId, NOW, TIMEOUT);
+            var enrollmentId = UUID.randomUUID();
+            var entity = TestEntityFactory.invoice(enrollmentId, NOW, TIMEOUT);
 
             repository.saveAndFlush(entity);
-            var loaded = repository.findById(requestId).orElseThrow();
+            var loaded = repository.findById(enrollmentId).orElseThrow();
 
             assertThat(loaded.getPaymentType()).isEqualTo(PaymentType.INVOICE);
             assertThat(loaded.getSignals()).containsOnlyKeys(SignalConfig.FRAUD_CHECK);
@@ -73,19 +73,19 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void acquiresRowLockWithoutError() {
-            var requestId = UUID.randomUUID();
-            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
 
-            var locked = repository.findByRequestIdForUpdate(requestId);
+            var locked = repository.findByEnrollmentIdForUpdate(enrollmentId);
 
             assertThat(locked).isPresent();
-            assertThat(locked.get().getRequestId()).isEqualTo(requestId);
+            assertThat(locked.get().getEnrollmentId()).isEqualTo(enrollmentId);
         }
 
         @Test
         @Transactional
         void returnsEmptyForNonexistentRequest() {
-            assertThat(repository.findByRequestIdForUpdate(UUID.randomUUID())).isEmpty();
+            assertThat(repository.findByEnrollmentIdForUpdate(UUID.randomUUID())).isEmpty();
         }
     }
 
@@ -96,23 +96,23 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void writesJsonbColumn_andReturnsOneRow() {
-            var requestId = UUID.randomUUID();
-            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
 
             // Build a new signal map: GEO_SCORE settled HIGH; FRAUD_CHECK still PENDING.
             var newSignals = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
             newSignals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
             var json = jsonMapper.writeValueAsString(newSignals);
 
-            int rows = repository.updateSignals(requestId, json);
+            int rows = repository.updateSignals(enrollmentId, json);
 
             assertThat(rows).isEqualTo(1);
-            assertSignalsRoundTrip(requestId, newSignals);
+            assertSignalsRoundTrip(enrollmentId, newSignals);
         }
 
         @Test
         @Transactional
-        void returnsZero_whenRequestIdDoesNotExist() {
+        void returnsZero_whenEnrollmentIdDoesNotExist() {
             var json = jsonMapper.writeValueAsString(
                     SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
 
@@ -128,18 +128,18 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         void overwritesPreviousJsonbValue_completely() {
             // Set initial state to one shape, then UPDATE to a different shape;
             // verify the second shape replaces the first wholesale (not merged).
-            var requestId = UUID.randomUUID();
-            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
 
             var firstWrite = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
             firstWrite.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            repository.updateSignals(requestId, jsonMapper.writeValueAsString(firstWrite));
+            repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(firstWrite));
 
             var secondWrite = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
             secondWrite.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-            repository.updateSignals(requestId, jsonMapper.writeValueAsString(secondWrite));
+            repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(secondWrite));
 
-            assertSignalsRoundTrip(requestId, secondWrite);
+            assertSignalsRoundTrip(enrollmentId, secondWrite);
         }
     }
 
@@ -155,13 +155,13 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void persistsAllDecisionFields_andReturnsOneRow() {
-            var requestId = UUID.randomUUID();
-            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
             var decisionId = UUID.randomUUID();
             var decidedAt = NOW.plusSeconds(5);
 
             int rows = repository.completeWithDecision(
-                    requestId, SETTLED_SIGNALS_JSON, DecisionResult.APPROVED.name(), decisionId, decidedAt);
+                    enrollmentId, SETTLED_SIGNALS_JSON, DecisionResult.APPROVED.name(), decisionId, decidedAt);
 
             assertThat(rows).isEqualTo(1);
 
@@ -169,8 +169,8 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             // JDBC maps TIMESTAMPTZ to java.sql.Timestamp; convert to Instant for comparison.
             var row = jdbcTemplate.queryForMap(
                     "SELECT decision_result, decision_id, decided_at, signals::text AS signals " +
-                            "FROM enrollment_hub.enrollments WHERE request_id = ?",
-                    requestId);
+                            "FROM enrollment_hub.enrollments WHERE enrollment_id = ?",
+                    enrollmentId);
             assertThat(row.get("decision_result")).isEqualTo("APPROVED");
             assertThat(row.get("decision_id")).isEqualTo(decisionId);
             assertThat(((java.sql.Timestamp) row.get("decided_at")).toInstant()).isEqualTo(decidedAt);
@@ -182,13 +182,13 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void returnsZero_whenDecisionAlreadyRecorded_andDoesNotOverwrite() {
-            var requestId = UUID.randomUUID();
-            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
             var firstDecisionId = UUID.randomUUID();
-            repository.completeWithDecision(requestId, SETTLED_SIGNALS_JSON,
+            repository.completeWithDecision(enrollmentId, SETTLED_SIGNALS_JSON,
                     DecisionResult.APPROVED.name(), firstDecisionId, NOW.plusSeconds(5));
 
-            int secondRows = repository.completeWithDecision(requestId, SETTLED_SIGNALS_JSON,
+            int secondRows = repository.completeWithDecision(enrollmentId, SETTLED_SIGNALS_JSON,
                     DecisionResult.REJECTED.name(), UUID.randomUUID(), NOW.plusSeconds(10));
 
             assertThat(secondRows)
@@ -197,15 +197,15 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
 
             // Confirm the first decision survived intact.
             var row = jdbcTemplate.queryForMap(
-                    "SELECT decision_result, decision_id FROM enrollment_hub.enrollments WHERE request_id = ?",
-                    requestId);
+                    "SELECT decision_result, decision_id FROM enrollment_hub.enrollments WHERE enrollment_id = ?",
+                    enrollmentId);
             assertThat(row.get("decision_result")).isEqualTo("APPROVED");
             assertThat(row.get("decision_id")).isEqualTo(firstDecisionId);
         }
 
         @Test
         @Transactional
-        void returnsZero_whenRequestIdDoesNotExist() {
+        void returnsZero_whenEnrollmentIdDoesNotExist() {
             int rows = repository.completeWithDecision(
                     UUID.randomUUID(), SETTLED_SIGNALS_JSON,
                     DecisionResult.APPROVED.name(), UUID.randomUUID(), NOW);
@@ -226,7 +226,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             var results = repository.findPendingTimeouts(TIMEOUT.plusSeconds(1));
 
             assertThat(results).hasSize(1);
-            assertThat(results.getFirst().getRequestId()).isEqualTo(entity.getRequestId());
+            assertThat(results.getFirst().getEnrollmentId()).isEqualTo(entity.getEnrollmentId());
         }
 
         @Test
@@ -243,9 +243,9 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void excludesFullySettledRequests() {
-            var requestId = UUID.randomUUID();
-            repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
-            repository.completeWithDecision(requestId, "{}",
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
+            repository.completeWithDecision(enrollmentId, "{}",
                     DecisionResult.APPROVED.name(), UUID.randomUUID(), NOW.plusSeconds(5));
 
             var results = repository.findPendingTimeouts(TIMEOUT.plusSeconds(1));
@@ -290,10 +290,10 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private void assertSignalsRoundTrip(UUID requestId, Map<SignalConfig, SignalState> expected) {
+    private void assertSignalsRoundTrip(UUID enrollmentId, Map<SignalConfig, SignalState> expected) {
         var json = jdbcTemplate.queryForObject(
-                "SELECT signals::text FROM enrollment_hub.enrollments WHERE request_id = ?",
-                String.class, requestId);
+                "SELECT signals::text FROM enrollment_hub.enrollments WHERE enrollment_id = ?",
+                String.class, enrollmentId);
         assertThat(json).isNotNull();
         Map<String, SignalState> actual =
                 jsonMapper.readValue(json, new TypeReference<HashMap<String, SignalState>>() {});

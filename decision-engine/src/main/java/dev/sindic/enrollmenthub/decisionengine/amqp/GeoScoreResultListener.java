@@ -20,12 +20,12 @@ class GeoScoreResultListener {
 
     @RabbitListener(queues = AmqpConfig.GEO_SCORE_QUEUE)
     void handleGeoScoreResult(GeoScoreResult event) {
-        MDC.put("requestId", event.requestId().toString());
+        MDC.put("enrollmentId", event.enrollmentId().toString());
         try {
             log.info("Received geoScoreResult riskLevel={}", event.riskLevel());
-            service.recordSignalResult(event.requestId(), SignalConfig.GEO_SCORE, toSignalState(event));
+            service.recordSignalResult(event.enrollmentId(), SignalConfig.GEO_SCORE, toSignalState(event));
         } finally {
-            MDC.remove("requestId");
+            MDC.remove("enrollmentId");
         }
     }
 

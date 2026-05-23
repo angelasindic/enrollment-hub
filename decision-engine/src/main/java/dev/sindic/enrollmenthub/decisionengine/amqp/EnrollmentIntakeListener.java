@@ -28,12 +28,12 @@ public class EnrollmentIntakeListener {
 
     @RabbitListener(queues = AmqpConfig.ENROLLMENT_INTAKE_QUEUE)
     void handleIntake(EnrollmentEvent event) {
-        MDC.put("requestId", event.enrollmentId());
+        MDC.put("enrollmentId", event.enrollmentId());
         try {
             log.info("Received enrollment id={}", event.enrollmentId());
             service.processEnrollment(event.createdAt(), EnrollmentMapper.toCommand(event));
         } finally {
-            MDC.remove("requestId");
+            MDC.remove("enrollmentId");
         }
     }
 }

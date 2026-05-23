@@ -21,7 +21,7 @@ import java.util.UUID;
  * <p>{@link #recordSignalResult} implements the ADR-015 protocol:
  * <ol>
  *   <li>Acquire a pessimistic row lock via
- *       {@link EnrollmentRepository#findByRequestIdForUpdate(UUID)}.</li>
+ *       {@link EnrollmentRepository#findByEnrollmentIdForUpdate(UUID)}.</li>
  *   <li>Idempotency guard — discard if the signal is already settled.</li>
  *   <li>Compute the new signal map via the immutable domain transition
  *       {@code EnrollmentProcess.withSignalResult(...)}.</li>
@@ -62,9 +62,9 @@ public class EnrollmentService {
     }
 
     @Transactional
-    public void recordSignalResult(UUID requestId, SignalConfig signal, SignalState newState) {
-        var entity = repository.findByRequestIdForUpdate(requestId)
-                .orElseThrow(() -> new UnknownCorrelationException(requestId));
+    public void recordSignalResult(UUID enrollmentId, SignalConfig signal, SignalState newState) {
+        var entity = repository.findByEnrollmentIdForUpdate(enrollmentId)
+                .orElseThrow(() -> new UnknownCorrelationException(enrollmentId));
 
         // Idempotency guard — duplicate delivery or late arrival after timeout.
         var currentSignal = entity.getSignals().get(signal);
@@ -83,26 +83,26 @@ public class EnrollmentService {
         // on the completion path. Avoids the intermediate row state where all
         // signals are settled but the decision column is still NULL.
         if (!SignalConfig.allSettled(updatedSignals)) {
-            int rows = repository.updateSignals(requestId, signalsJson);
+            int rows = repository.updateSignals(enrollmentId, signalsJson);
             if (rows != 1) {
                 throw new IllegalStateException(
-                        "updateSignals affected " + rows + " rows for requestId=" + requestId);
+                        "updateSignals affected " + rows + " rows for enrollmentId=" + enrollmentId);
             }
             return;
         }
 
-        var decision = DecisionEngine.evaluate(updatedSignals, requestId);
+        var decision = DecisionEngine.evaluate(updatedSignals, enrollmentId);
         var decisionId = UUID.randomUUID();
         var decidedAt = clock.instant();
 
         int rows = repository.completeWithDecision(
-                requestId, signalsJson, decision.decision().name(), decisionId, decidedAt);
+                enrollmentId, signalsJson, decision.decision().name(), decisionId, decidedAt);
         if (rows != 1) {
             // The decision_result IS NULL guard rejected — another path already
             // completed under our lock (structurally impossible, but if it
             // happens we must not double-publish).
-            log.warn("completeWithDecision affected {} rows for requestId={}; decision not published",
-                    rows, requestId);
+            log.warn("completeWithDecision affected {} rows for enrollmentId={}; decision not published",
+                    rows, enrollmentId);
             return;
         }
 

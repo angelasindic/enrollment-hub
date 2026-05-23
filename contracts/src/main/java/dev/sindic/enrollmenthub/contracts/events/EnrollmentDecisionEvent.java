@@ -11,7 +11,7 @@ import java.util.UUID;
  * Published by the decision engine after all applicable signals have settled.
  *
  * <p>{@code decisionId} is a freshly generated UUID — the internal correlation
- * {@code requestId} (the DB primary key) is intentionally not exposed.
+ * {@code enrollmentId} (the DB primary key) is intentionally not exposed.
  *
  * <p>{@code originalRequest} carries the full enrollment data as submitted at
  * intake. Downstream consumers receive it as a clean nested JSON object.

@@ -27,7 +27,7 @@ import java.util.UUID;
  *
  * <p>{@code decisionId} is a freshly generated UUID set when the decision is
  * recorded. It is published in {@code EnrollmentDecisionEvent} instead of
- * {@code requestId} to avoid exposing the internal primary key.
+ * {@code enrollmentId} to avoid exposing the internal primary key.
  *
  * @see EnrollmentProcess
  */
@@ -36,8 +36,8 @@ import java.util.UUID;
 public class EnrollmentEntity {
 
     @Id
-    @Column(name = "request_id", nullable = false, updatable = false)
-    private UUID requestId;
+    @Column(name = "enrollment_id", nullable = false, updatable = false)
+    private UUID enrollmentId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "payment_type", nullable = false, updatable = false)
@@ -69,13 +69,13 @@ public class EnrollmentEntity {
 
     protected EnrollmentEntity() {}
 
-    private EnrollmentEntity(UUID requestId,
+    private EnrollmentEntity(UUID enrollmentId,
                               PaymentType paymentType,
                               String originalRequest,
                               Map<SignalConfig, SignalState> signals,
                               Instant createdAt,
                               Instant timeoutAt) {
-        this.requestId = requestId;
+        this.enrollmentId = enrollmentId;
         this.paymentType = paymentType;
         this.originalRequest = originalRequest;
         this.signals = new EnumMap<>(signals);
@@ -83,13 +83,13 @@ public class EnrollmentEntity {
         this.timeoutAt = timeoutAt;
     }
 
-    public static EnrollmentEntity create(UUID requestId,
+    public static EnrollmentEntity create(UUID enrollmentId,
                                           PaymentType paymentType,
                                           String originalRequest,
                                           Instant createdAt,
                                           Instant timeoutAt) {
         return new EnrollmentEntity(
-                requestId, paymentType, originalRequest,
+                enrollmentId, paymentType, originalRequest,
                 SignalConfig.initializeFor(paymentType),
                 createdAt, timeoutAt);
     }
@@ -104,12 +104,12 @@ public class EnrollmentEntity {
     }
 
     public EnrollmentProcess toDomain(EnrollmentCommand command) {
-        return new EnrollmentProcess(requestId, command, signals, createdAt, timeoutAt);
+        return new EnrollmentProcess(enrollmentId, command, signals, createdAt, timeoutAt);
     }
 
     // --- Getters ---
 
-    public UUID getRequestId()               { return requestId; }
+    public UUID getEnrollmentId()            { return enrollmentId; }
     public PaymentType getPaymentType()      { return paymentType; }
     public String getOriginalRequest()        { return originalRequest; }
     public Map<SignalConfig, SignalState> getSignals() { return signals; }

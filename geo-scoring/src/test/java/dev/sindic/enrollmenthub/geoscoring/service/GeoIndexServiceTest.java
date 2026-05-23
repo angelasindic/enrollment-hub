@@ -119,15 +119,15 @@ class GeoIndexServiceTest {
 
     @Test
     void toEvent_mapsAllFields() {
-        var requestId = UUID.randomUUID();
+        var enrollmentId = UUID.randomUUID();
         var density = new DensityResult(
                 Map.of(100, 6, 250, 10, 500, 15),
                 List.of(RiskLevel.HIGH, RiskLevel.MEDIUM, RiskLevel.LOW), false);
         var coordinates = new CoordinatesPayload(52.52, 13.405);
 
-        var event = service.toEvent(requestId, density, coordinates);
+        var event = service.toEvent(enrollmentId, density, coordinates);
 
-        assertThat(event.requestId()).isEqualTo(requestId);
+        assertThat(event.enrollmentId()).isEqualTo(enrollmentId);
         assertThat(event.riskLevel()).isEqualTo(RiskLevel.HIGH);
         assertThat(event.noResultReason()).isNull();
         assertThat(event.neighborCounts()).isEqualTo(Map.of(100, 6, 250, 10, 500, 15));

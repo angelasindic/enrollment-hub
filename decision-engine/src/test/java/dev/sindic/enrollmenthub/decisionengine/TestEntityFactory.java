@@ -25,17 +25,17 @@ public final class TestEntityFactory {
 
     private TestEntityFactory() {}
 
-    public static EnrollmentEntity creditCard(UUID requestId, Instant createdAt, Instant timeoutAt) {
-        return EnrollmentEntity.create(requestId, PaymentType.CREDIT_CARD,
-                originalRequestJson(requestId, "CREDIT_CARD"), createdAt, timeoutAt);
+    public static EnrollmentEntity creditCard(UUID enrollmentId, Instant createdAt, Instant timeoutAt) {
+        return EnrollmentEntity.create(enrollmentId, PaymentType.CREDIT_CARD,
+                originalRequestJson(enrollmentId, "CREDIT_CARD"), createdAt, timeoutAt);
     }
 
-    public static EnrollmentEntity invoice(UUID requestId, Instant createdAt, Instant timeoutAt) {
-        return EnrollmentEntity.create(requestId, PaymentType.INVOICE,
-                originalRequestJson(requestId, "INVOICE"), createdAt, timeoutAt);
+    public static EnrollmentEntity invoice(UUID enrollmentId, Instant createdAt, Instant timeoutAt) {
+        return EnrollmentEntity.create(enrollmentId, PaymentType.INVOICE,
+                originalRequestJson(enrollmentId, "INVOICE"), createdAt, timeoutAt);
     }
 
-    private static String originalRequestJson(UUID requestId, String paymentType) {
-        return ORIGINAL_REQUEST_TEMPLATE.formatted(requestId, paymentType);
+    private static String originalRequestJson(UUID enrollmentId, String paymentType) {
+        return ORIGINAL_REQUEST_TEMPLATE.formatted(enrollmentId, paymentType);
     }
 }

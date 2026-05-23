@@ -25,7 +25,7 @@ class AmqpConfigTest {
 
     @Test
     void listenerRetryPolicy_doesNotRetryUnknownCorrelation() {
-        // A signal result for an unknown requestId is structurally non-retryable —
+        // A signal result for an unknown enrollmentId is structurally non-retryable —
         // re-invoking the listener cannot make the correlation row appear.
         var policy = AmqpConfig.listenerRetryPolicy();
 

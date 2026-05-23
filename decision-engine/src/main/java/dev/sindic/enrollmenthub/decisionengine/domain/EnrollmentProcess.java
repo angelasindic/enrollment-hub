@@ -22,7 +22,7 @@ import java.util.UUID;
  * @see SignalState
  */
 public record EnrollmentProcess(
-        UUID requestId,
+        UUID enrollmentId,
         EnrollmentCommand command,
         Map<SignalConfig, SignalState> signals,
         Instant createdAt,
@@ -30,7 +30,7 @@ public record EnrollmentProcess(
 ) {
 
     public EnrollmentProcess {
-        Objects.requireNonNull(requestId, "requestId must not be null");
+        Objects.requireNonNull(enrollmentId, "enrollmentId must not be null");
         Objects.requireNonNull(command, "command must not be null");
         Objects.requireNonNull(signals, "signals must not be null");
         Objects.requireNonNull(createdAt, "createdAt must not be null");
@@ -42,11 +42,11 @@ public record EnrollmentProcess(
      * Creates a new process with signals initialised for the given payment type.
      * Derived entirely from {@link SignalConfig} metadata.
      */
-    public static EnrollmentProcess start(UUID requestId,
+    public static EnrollmentProcess start(UUID enrollmentId,
                                           EnrollmentCommand command,
                                           Instant createdAt,
                                           Instant timeoutAt) {
-        return new EnrollmentProcess(requestId, command,
+        return new EnrollmentProcess(enrollmentId, command,
                 SignalConfig.initializeFor(command.paymentType()),
                 createdAt, timeoutAt);
     }
@@ -60,7 +60,7 @@ public record EnrollmentProcess(
     public EnrollmentProcess withSignalResult(SignalConfig signal, SignalState state) {
         var updated = new EnumMap<>(signals);
         updated.put(signal, state);
-        return new EnrollmentProcess(requestId, command, updated, createdAt, timeoutAt);
+        return new EnrollmentProcess(enrollmentId, command, updated, createdAt, timeoutAt);
     }
 
     /**
@@ -73,6 +73,6 @@ public record EnrollmentProcess(
                 state.processingState() == SignalProcessingState.PENDING
                         ? SignalState.failed()
                         : state);
-        return new EnrollmentProcess(requestId, command, updated, createdAt, timeoutAt);
+        return new EnrollmentProcess(enrollmentId, command, updated, createdAt, timeoutAt);
     }
 }

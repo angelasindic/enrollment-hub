@@ -270,7 +270,7 @@ public class AmqpConfig {
      * instead of consuming the retry budget on a condition that cannot recover:
      * <ul>
      *   <li>{@link UnknownCorrelationException} — a signal result arrived for a
-     *       {@code requestId} with no correlation row. Re-invoking the listener
+     *       {@code enrollmentId} with no correlation row. Re-invoking the listener
      *       cannot make the row appear; immediate DLQ routing surfaces the
      *       inconsistency for triage instead of delaying it.</li>
      * </ul>

@@ -64,7 +64,7 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(enrollmentId);
+            assertThat(result.enrollmentId()).isEqualTo(enrollmentId);
             assertThat(result.neighborCounts()).isNotNull();
         });
     }
@@ -78,7 +78,7 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(enrollmentId);
+            assertThat(result.enrollmentId()).isEqualTo(enrollmentId);
         });
     }
 
@@ -118,7 +118,7 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(enrollmentId);
+            assertThat(result.enrollmentId()).isEqualTo(enrollmentId);
         });
 
         var dlqMessage = rabbitTemplate.receive(AmqpConfig.DLQ, 200);
@@ -136,7 +136,7 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(enrollmentId);
+            assertThat(result.enrollmentId()).isEqualTo(enrollmentId);
             assertThat(result.riskLevel()).isNull();
             assertThat(result.noResultReason()).isEqualTo("geocoding_failed");
             assertThat(result.latitude()).isNull();

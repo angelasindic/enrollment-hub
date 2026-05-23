@@ -66,19 +66,19 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
     @Test
     void transactionalAlone_loses_updates_under_concurrent_readModifyWrite() throws Exception {
         // GIVEN: a fresh enrollment with both signals PENDING.
-        UUID requestId = UUID.randomUUID();
+        UUID enrollmentId = UUID.randomUUID();
         txTemplate.executeWithoutResult(tx -> repository.save(
-                TestEntityFactory.creditCard(requestId, CREATED_AT, TIMEOUT_AT)));
+                TestEntityFactory.creditCard(enrollmentId, CREATED_AT, TIMEOUT_AT)));
 
         // WHEN: two threads each read, mutate one signal, and write — coordinated
         //       so both reads land before either write. NO SELECT FOR UPDATE.
-        runConcurrentReadModifyWrite(requestId, /* useSelectForUpdate */ false,
+        runConcurrentReadModifyWrite(enrollmentId, /* useSelectForUpdate */ false,
                 SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW),
                 SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
 
         // THEN: only ONE of the two signals is SETTLED. The other was overwritten
         //       by the loser's stale-snapshot UPDATE. This is the lost-update race.
-        Map<SignalConfig, SignalState> finalSignals = readSignals(requestId);
+        Map<SignalConfig, SignalState> finalSignals = readSignals(enrollmentId);
         long settledCount = finalSignals.values().stream()
                 .filter(s -> s.processingState() == SignalProcessingState.SETTLED)
                 .count();
@@ -93,20 +93,20 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
     @Test
     void selectForUpdate_preserves_both_updates_under_concurrent_readModifyWrite() throws Exception {
         // GIVEN: a fresh enrollment with both signals PENDING.
-        UUID requestId = UUID.randomUUID();
+        UUID enrollmentId = UUID.randomUUID();
         txTemplate.executeWithoutResult(tx -> repository.save(
-                TestEntityFactory.creditCard(requestId, CREATED_AT, TIMEOUT_AT)));
+                TestEntityFactory.creditCard(enrollmentId, CREATED_AT, TIMEOUT_AT)));
 
         // WHEN: same race shape, but the SELECT takes a row lock via FOR UPDATE.
         //       The second thread's SELECT blocks until the first commits, so it
         //       reads the post-update state and computes the new map from
         //       fresh data instead of stale data.
-        runConcurrentReadModifyWrite(requestId, /* useSelectForUpdate */ true,
+        runConcurrentReadModifyWrite(enrollmentId, /* useSelectForUpdate */ true,
                 SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW),
                 SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
 
         // THEN: both signals SETTLED — no lost update.
-        Map<SignalConfig, SignalState> finalSignals = readSignals(requestId);
+        Map<SignalConfig, SignalState> finalSignals = readSignals(enrollmentId);
         long settledCount = finalSignals.values().stream()
                 .filter(s -> s.processingState() == SignalProcessingState.SETTLED)
                 .count();
@@ -122,7 +122,7 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
     // -----------------------------------------------------------------------
 
     private void runConcurrentReadModifyWrite(
-            UUID requestId,
+            UUID enrollmentId,
             boolean useSelectForUpdate,
             SignalConfig signalA, SignalState newStateA,
             SignalConfig signalB, SignalState newStateB) throws Exception {
@@ -136,9 +136,9 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            pool.submit(() -> readModifyWrite(requestId, useSelectForUpdate,
+            pool.submit(() -> readModifyWrite(enrollmentId, useSelectForUpdate,
                     signalA, newStateA, bothRead, failure));
-            pool.submit(() -> readModifyWrite(requestId, useSelectForUpdate,
+            pool.submit(() -> readModifyWrite(enrollmentId, useSelectForUpdate,
                     signalB, newStateB, bothRead, failure));
 
             pool.shutdown();
@@ -155,7 +155,7 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         }
     }
 
-    private void readModifyWrite(UUID requestId,
+    private void readModifyWrite(UUID enrollmentId,
                                  boolean useSelectForUpdate,
                                  SignalConfig signal,
                                  SignalState newState,
@@ -166,10 +166,10 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
                 // 1. SELECT — with or without row lock.
                 String sql = useSelectForUpdate
                         ? "SELECT signals::text FROM enrollment_hub.enrollments " +
-                          "WHERE request_id = ? FOR UPDATE"
+                          "WHERE enrollment_id = ? FOR UPDATE"
                         : "SELECT signals::text FROM enrollment_hub.enrollments " +
-                          "WHERE request_id = ?";
-                String currentJson = jdbcTemplate.queryForObject(sql, String.class, requestId);
+                          "WHERE enrollment_id = ?";
+                String currentJson = jdbcTemplate.queryForObject(sql, String.class, enrollmentId);
 
                 // 2. Coordinate: signal that we've read, wait for the peer to also have read.
                 //    Under FOR UPDATE the second SELECT will block at step 1 and never
@@ -200,8 +200,8 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
                 //    value we're writing was already determined from stale data.
                 jdbcTemplate.update(
                         "UPDATE enrollment_hub.enrollments SET signals = ?::jsonb " +
-                        "WHERE request_id = ?",
-                        newJson, requestId);
+                        "WHERE enrollment_id = ?",
+                        newJson, enrollmentId);
             });
         } catch (Throwable ex) {
             failure.compareAndSet(null, ex);
@@ -212,7 +212,7 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         return jsonMapper.readValue(json, new TypeReference<HashMap<String, SignalState>>() {});
     }
 
-    private Map<SignalConfig, SignalState> readSignals(UUID requestId) {
-        return txTemplate.execute(tx -> repository.findById(requestId).orElseThrow().getSignals());
+    private Map<SignalConfig, SignalState> readSignals(UUID enrollmentId) {
+        return txTemplate.execute(tx -> repository.findById(enrollmentId).orElseThrow().getSignals());
     }
 }

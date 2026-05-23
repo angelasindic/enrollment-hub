@@ -8,7 +8,7 @@ CREATE SCHEMA IF NOT EXISTS enrollment_hub;
 CREATE TABLE enrollment_hub.enrollments (
 
     -- Correlation identity (internal PK — never published downstream)
-    request_id              UUID            PRIMARY KEY,
+    enrollment_id           UUID            PRIMARY KEY,
     payment_type            VARCHAR(20)     NOT NULL,
 
     -- Full original enrollment request, stored at intake so the decision event
@@ -21,7 +21,7 @@ CREATE TABLE enrollment_hub.enrollments (
     signals                 JSONB           NOT NULL,
 
     -- Decision (nullable — set when all signals settle)
-    -- decision_id is a fresh UUID generated at decision time, published instead of request_id.
+    -- decision_id is a fresh UUID generated at decision time, published instead of enrollment_id.
     decision_result         VARCHAR(30),
     decision_id             UUID,
 

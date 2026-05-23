@@ -3,7 +3,7 @@ package dev.sindic.enrollmenthub.decisionengine.service;
 import java.util.UUID;
 
 /**
- * Signal result arrived for a {@code requestId} with no corresponding correlation
+ * Signal result arrived for a {@code enrollmentId} with no corresponding correlation
  * record. Non-retryable — re-invoking the listener will not make the row appear,
  * so the listener advice chain routes this exception type straight to the DLQ
  * via {@code RetryPolicy.excludes}.
@@ -14,7 +14,7 @@ import java.util.UUID;
  */
 public class UnknownCorrelationException extends RuntimeException {
 
-    public UnknownCorrelationException(UUID requestId) {
-        super("No correlation record found for requestId=" + requestId);
+    public UnknownCorrelationException(UUID enrollmentId) {
+        super("No correlation record found for enrollmentId=" + enrollmentId);
     }
 }

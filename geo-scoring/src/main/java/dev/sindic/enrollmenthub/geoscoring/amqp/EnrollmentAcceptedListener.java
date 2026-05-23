@@ -21,14 +21,14 @@ class EnrollmentAcceptedListener {
 
     @RabbitListener(queues = AmqpConfig.QUEUE)
     void handleEnrollmentAccepted(EnrollmentEvent event) {
-        MDC.put("requestId", event.enrollmentId());
+        MDC.put("enrollmentId", event.enrollmentId());
         try {
             log.info("Received enrollmentAccepted paymentType={}",
                     event.enrollmentData().paymentType());
             geoScoringService.scoreAddress(
                     event.enrollmentData().enrollmentId(), event.enrollmentData().shippingAddress());
         } finally {
-            MDC.remove("requestId");
+            MDC.remove("enrollmentId");
         }
     }
 }

@@ -22,8 +22,8 @@ import java.util.UUID;
  * <h2>Two locking patterns coexist here</h2>
  *
  * <p><b>Specific-row coordination</b> (ADR-015 §"Concurrent Scatter-Gather Completion").
- * Result handlers serialise on a known {@code requestId} via
- * {@link #findByRequestIdForUpdate(UUID)} — {@code PESSIMISTIC_WRITE} without
+ * Result handlers serialise on a known {@code enrollmentId} via
+ * {@link #findByEnrollmentIdForUpdate(UUID)} — {@code PESSIMISTIC_WRITE} without
  * {@code SKIP LOCKED}. If another transaction holds the row, the second handler
  * <i>waits</i> for the first to commit so it observes the post-first-commit state.
  * This is correct because the two handlers are processing different signals that
@@ -49,8 +49,8 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
      * concurrent handlers from reading or writing the same row.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT r FROM EnrollmentEntity r WHERE r.requestId = :requestId")
-    Optional<EnrollmentEntity> findByRequestIdForUpdate(@Param("requestId") UUID requestId);
+    @Query("SELECT r FROM EnrollmentEntity r WHERE r.enrollmentId = :enrollmentId")
+    Optional<EnrollmentEntity> findByEnrollmentIdForUpdate(@Param("enrollmentId") UUID enrollmentId);
 
     /**
      * Replaces the {@code signals} JSONB column with the given serialised value.
@@ -62,7 +62,7 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
      * {@code CAST(… AS jsonb)}) on the bound text parameter; the JPQL layer
      * does not expose a portable way to request that cast.
      *
-     * @param requestId    target row PK
+     * @param enrollmentId    target row PK
      * @param signalsJson  serialised {@code Map<SignalConfig, SignalState>} —
      *                     produced via the same {@code JsonMapper} the entity's
      *                     {@code @JdbcTypeCode(SqlTypes.JSON)} uses on the read path
@@ -72,9 +72,9 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
     @Query(value = """
             UPDATE enrollment_hub.enrollments
                SET signals = CAST(:signalsJson AS jsonb)
-             WHERE request_id = :requestId
+             WHERE enrollment_id = :enrollmentId
             """, nativeQuery = true)
-    int updateSignals(@Param("requestId") UUID requestId,
+    int updateSignals(@Param("enrollmentId") UUID enrollmentId,
                       @Param("signalsJson") String signalsJson);
 
     /**
@@ -100,10 +100,10 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                    decision_result = :decisionResult,
                    decision_id     = :decisionId,
                    decided_at      = :decidedAt
-             WHERE request_id      = :requestId
+             WHERE enrollment_id      = :enrollmentId
                AND decision_result IS NULL
             """, nativeQuery = true)
-    int completeWithDecision(@Param("requestId") UUID requestId,
+    int completeWithDecision(@Param("enrollmentId") UUID enrollmentId,
                              @Param("signalsJson") String signalsJson,
                              // Bound as String, not the enum, because native queries lack
                              // the @Enumerated(STRING) metadata that JPQL infers from the
@@ -118,7 +118,7 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
      * {@code PESSIMISTIC_WRITE} until the enclosing transaction commits.
      *
      * <p>Rows already locked by another transaction (typically a result handler
-     * holding a lock via {@link #findByRequestIdForUpdate(UUID)}) are
+     * holding a lock via {@link #findByEnrollmentIdForUpdate(UUID)}) are
      * <b>skipped</b>, not waited on. This is what makes safe horizontal scaling
      * of the poller possible: N poller instances calling this method concurrently
      * partition the work cleanly because the rows each instance returns are

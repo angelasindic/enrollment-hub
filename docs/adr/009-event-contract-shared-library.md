@@ -55,7 +55,7 @@ organised under `dev.sindic.enrollmenthub.contracts.events` and `dev.sindic.enro
 Field names use **camelCase** in the JSON wire format — the Jackson default with no naming strategy annotation. All
 consumers are Java services in the same mono-repo; camelCase matches the record component names and requires zero
 Jackson configuration. The field tables below use `snake_case` as a documentation convention for readability; the
-actual serialized field names are camelCase (e.g., `requestId`, `paymentType`, `countryCode`).
+actual serialized field names are camelCase (e.g., `enrollmentId`, `paymentType`, `countryCode`).
 
 All events are Java records, Jackson-serializable.
 

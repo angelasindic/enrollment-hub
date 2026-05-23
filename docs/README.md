@@ -86,6 +86,7 @@ The core pipeline is implemented. Several items are planned but not yet built.
 
 **Implemented:**
 - RabbitMQ scatter-gather topology (`enrollment.events` topic exchange, geo-score result queue with DLQ)
+- Durable intake queue (`enrollment.intake`, ADR-003 Layer 1) — `EnrollmentIntakeService` consumes and publishes `EnrollmentAccepted` post-commit
 - Durable correlation record (PostgreSQL, JSONB signal map, `SELECT FOR UPDATE` concurrency guard)
 - Decision Engine with ADR-018 signal classification model (BEST_EFFORT + SCORING_SIGNAL aggregation)
 - Complete Geo-Scoring module (libpostal normalisation, Nominatim geocoding, atomic Redis Lua density check)
@@ -93,7 +94,6 @@ The core pipeline is implemented. Several items are planned but not yet built.
 - `EnrollmentDecisionEvent` published with `decisionId`, `originalRequest`, and settled signal results
 
 **Not yet implemented:**
-- Intake queue (`enrollment.intake`, ADR-003 Layer 1) — REST endpoint calls `CreateEnrollmentService` directly
 - Dedicated outbound exchange (`enrollment.decisions`, ADR-003 Layer 3) — decisions published to `enrollment.events`
 - Timeout poller (ADR-010) — `findPendingTimeouts()` query exists; `@Scheduled` job not wired
 - Decision-engine as OAuth2 resource server + prerequisite token validation (ADR-007) — dependency commented out

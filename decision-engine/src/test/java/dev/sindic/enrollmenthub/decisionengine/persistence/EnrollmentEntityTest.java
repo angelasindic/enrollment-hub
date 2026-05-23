@@ -103,13 +103,13 @@ class EnrollmentEntityTest {
 
         @Test
         void creditCardConvertsToDomainModel() {
-            var requestId = UUID.randomUUID();
-            var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
+            var enrollmentId = UUID.randomUUID();
+            var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
             var command = creditCardCommand();
 
             var process = entity.toDomain(command);
 
-            assertThat(process.requestId()).isEqualTo(requestId);
+            assertThat(process.enrollmentId()).isEqualTo(enrollmentId);
             assertThat(process.signals()).containsOnlyKeys(SignalConfig.GEO_SCORE, SignalConfig.FRAUD_CHECK);
             assertThat(process.createdAt()).isEqualTo(NOW);
             assertThat(process.timeoutAt()).isEqualTo(TIMEOUT);
@@ -117,8 +117,8 @@ class EnrollmentEntityTest {
 
         @Test
         void invoiceConvertsToDomainModel() {
-            var requestId = UUID.randomUUID();
-            var entity = TestEntityFactory.invoice(requestId, NOW, TIMEOUT);
+            var enrollmentId = UUID.randomUUID();
+            var entity = TestEntityFactory.invoice(enrollmentId, NOW, TIMEOUT);
 
             var process = entity.toDomain(invoiceCommand());
 

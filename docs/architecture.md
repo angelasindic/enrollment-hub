@@ -530,7 +530,7 @@ transparent to the decision engine.
 - **Correlation DB:** Enrollment state and aggregated risk scores. Subject to GDPR retention policies — define
   retention period before production. The correlation record includes ``enrollment_data`` (JSON) containing the full
   enrollment payload. In production, the Account Service owns this data (ADR-006) and the decision engine would store
-  only ``request_id`` and ``payment_type`` at rest. Records are subject to the timeout window (default: [60 minutes])
+  only ``enrollment_id`` and ``payment_type`` at rest. Records are subject to the timeout window (default: [60 minutes])
   and a retention cleanup job (§10.1).
 - **Prerequisite tokens:** Validated in memory, not persisted. Only validation result (pass/fail) and failure reason
   logged.
@@ -579,52 +579,23 @@ and geocoding cache; raw addresses are transient in the event bus only. See §8.
 
 ### 8.6 Entry-Point Durability and Causal Ordering
 
-The decision engine's enrollment entry point originally performed two writes in sequence within a single request: it
-inserted a correlation record into PostgreSQL and then published an `EnrollmentAccepted` event to RabbitMQ for the
-check services to consume. These two writes target different systems, and there is no transaction that can span
-both. A crash between the two leaves the system in an inconsistent state in two distinct ways depending on the order
-in which the writes are issued.
+A naive two-write sequence — INSERT correlation record, then publish `EnrollmentAccepted` — has two failure modes:
+publish-before-commit risks delivering the event to a fast check service before the record is visible under
+PostgreSQL's read-committed isolation; commit-before-publish risks an orphan record if the process crashes between
+the two writes.
 
-When the publish is issued before the database commits, the broker can deliver the event to check services while
-the correlation record is still uncommitted. A fast check service will produce a result whose handler then queries
-the correlation table and finds nothing, because PostgreSQL's default read-committed isolation hides the in-flight
-INSERT from every connection except the one that issued it. The result is silently dropped, and the customer's
-enrollment stalls until the timeout poller eventually rescues it. When the publish is issued after the commit, the
-correlation record exists but a crash before the publish completes produces an orphan record with no event ever
-reaching the check services. The customer has already received an acknowledgement; nothing downstream knows the
-request exists.
+The chosen solution inverts the write order entirely. The REST endpoint publishes a durable intake message and
+returns 202; the decision engine's own intake consumer then reads that message, inserts the correlation record,
+commits, and only then publishes `EnrollmentAccepted` in a post-commit hook. The intake message remains
+unACKed until the downstream publish succeeds — a crash causes the broker to redeliver it on restart, and a unique
+constraint on `enrollment_id` absorbs the redelivery idempotently. No outbox table or relay is required. See
+ADR-003 for the exchange topology, the publish-after-commit mechanism, and the residual orphan-record monitoring
+metric.
 
-Three solution shapes were considered. The first preserves the two-write sequence but adds a Transactional Outbox:
-the correlation record and an outbox row are written in the same database transaction, and a separate relay process
-polls the outbox and publishes to the broker. This eliminates both failure modes at the cost of new infrastructure
-
-- an outbox table, a relay, and the operational burden of monitoring polling latency. The second leaves the sequence
-  unchanged but defers the publish to an `afterCommit` synchronization hook. This closes the race where the publish
-  beats the commit, but leaves the orphan-record window open because the hook fires in process memory and is lost on
-  crash. The third inverts the write order entirely. The REST endpoint publishes a durable intake message to a
-  dedicated point-to-point queue and does nothing else. A single decision engine consumer then reads the intake message,
-  writes the correlation record, commits, and publishes the downstream `EnrollmentAccepted` event in an `afterCommit`
-  hook. The intake message stays unacknowledged until the downstream publish succeeds, so a crash anywhere in the
-  middle causes the broker to redeliver the intake message after restart. The correlation INSERT uses a unique
-  constraint on the request identifier to absorb the redelivery idempotently.
-
-The third option was chosen because it provides the same end-to-end durability guarantee as the Transactional Outbox
-without introducing new infrastructure. The broker already provides at-least-once redelivery for unacknowledged
-messages, so the intake queue itself serves as the durable record of intent that an outbox table would otherwise
-provide. The causal ordering guarantee is a direct consequence of the same mechanism: no consumer on the internal
-event bus can receive `EnrollmentAccepted` for a correlation record that has not yet committed, because the publish
-only happens after the commit. The intake listener is the single sequential gatekeeper for the entire pipeline. See
-ADR-003 for the exchange topology, the publish-after-commit mechanism, the idempotency requirement on the
-correlation INSERT, and the residual orphan-record monitoring metric.
-
-This choice does not eliminate the need for the timeout poller documented in ADR-010. The two mechanisms address
-different failure modes and the distinction matters for operational reasoning. The intake queue closes the failure
-mode where messages are never published to the internal bus, by relying on the broker's redelivery of unacknowledged
-intake messages to recover from crashes between the correlation INSERT and the downstream publish. The timeout
-poller closes a completely different failure mode: check services going silent after the trigger event was
-published correctly, because of geo-scoring downtime, Redis unreachability, or geocoding API exhaustion. Conflating
-the two would be a mistake even if the intake queue did not exist, because they detect different classes of stall
-and they trigger different remediation paths.
+This choice does not eliminate the need for ADR-010. The two mechanisms address different failure modes. The intake
+queue closes the failure mode where messages are never published to the internal bus. The timeout poller closes a
+different failure mode: check services going silent after the trigger event was published correctly. Conflating the
+two would be a mistake — they detect different classes of stall and trigger different remediation paths.
 
 ### 8.7 Messaging Semantics
 
@@ -657,13 +628,13 @@ and consider a separate exchange per priority class.
 | Boundary                                        | Guarantee                                                                                             | Mechanism                                                  | Source           |
 |-------------------------------------------------|-------------------------------------------------------------------------------------------------------|------------------------------------------------------------|------------------|
 | Entry point: correlation record ↔ trigger event | Causal — no consumer observes `EnrollmentAccepted` for an uncommitted correlation record              | Intake queue + publish-after-commit                        | §8.6, ADR-003    |
-| Correlation record (per `requestId`)            | Serializable updates; exactly-once decision trigger under concurrent result arrivals                  | `SELECT FOR UPDATE` + ACK-after-commit + idempotency guard | ADR-015          |
+| Correlation record (per `enrollmentId`)            | Serializable updates; exactly-once decision trigger under concurrent result arrivals                  | `SELECT FOR UPDATE` + ACK-after-commit + idempotency guard | ADR-015          |
 | Geo-index density check + write (per request)   | Atomic across check and write; no TOCTOU race between concurrent enrollments                          | Single Redis Lua script                                    | ADR-014          |
 | Cross-service event delivery                    | At-least-once + idempotent consumers (effectively-once)                                               | §8.7                                                       | ADR-003, ADR-015 |
 | Cross-request ordering                          | None required — each request is processed independently (no causal link between distinct enrollments) | N/A                                                        | —                |
 | Late-arriving score vs. emitted decision        | Causally inconsistent by design — late results discarded; retroactive review is an open decision      | §6.4 callout                                               | §10.1            |
 
-There is no global linearizability requirement. Each `requestId` is its own small consistency domain; no consensus
+There is no global linearizability requirement. Each `enrollmentId` is its own small consistency domain; no consensus
 protocol crosses request boundaries. This is the simplest model that satisfies the workflow's correctness properties.
 ---
 
