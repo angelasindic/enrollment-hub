@@ -143,9 +143,14 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         }
     }
 
-    /** Repository-level write path for the scalar decision columns (ADR-015 §Write path symmetry). */
+    /** Repository-level write path for the combined signals+decision UPDATE (ADR-015 §Write path). */
     @Nested
-    class RecordDecisionMethod {
+    class CompleteWithDecisionMethod {
+
+        private static final String SETTLED_SIGNALS_JSON = """
+                {"FRAUD_CHECK":{"processingState":"SETTLED","outcome":"OK"},
+                 "GEO_SCORE":{"processingState":"SETTLED","riskLevel":"LOW"}}
+                """;
 
         @Test
         @Transactional
@@ -155,20 +160,23 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             var decisionId = UUID.randomUUID();
             var decidedAt = NOW.plusSeconds(5);
 
-            int rows = repository.recordDecision(
-                    requestId, DecisionResult.APPROVED, decisionId, decidedAt);
+            int rows = repository.completeWithDecision(
+                    requestId, SETTLED_SIGNALS_JSON, DecisionResult.APPROVED.name(), decisionId, decidedAt);
 
             assertThat(rows).isEqualTo(1);
 
             // Fresh read via JdbcTemplate — the L1 cache has a stale loaded copy.
             // JDBC maps TIMESTAMPTZ to java.sql.Timestamp; convert to Instant for comparison.
             var row = jdbcTemplate.queryForMap(
-                    "SELECT decision_result, decision_id, decided_at " +
+                    "SELECT decision_result, decision_id, decided_at, signals::text AS signals " +
                             "FROM enrollment_hub.enrollments WHERE request_id = ?",
                     requestId);
             assertThat(row.get("decision_result")).isEqualTo("APPROVED");
             assertThat(row.get("decision_id")).isEqualTo(decisionId);
             assertThat(((java.sql.Timestamp) row.get("decided_at")).toInstant()).isEqualTo(decidedAt);
+            assertThat((String) row.get("signals"))
+                    .contains("\"GEO_SCORE\"").contains("\"LOW\"")
+                    .contains("\"FRAUD_CHECK\"").contains("\"OK\"");
         }
 
         @Test
@@ -177,13 +185,14 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             var requestId = UUID.randomUUID();
             repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
             var firstDecisionId = UUID.randomUUID();
-            repository.recordDecision(requestId, DecisionResult.APPROVED, firstDecisionId, NOW.plusSeconds(5));
+            repository.completeWithDecision(requestId, SETTLED_SIGNALS_JSON,
+                    DecisionResult.APPROVED.name(), firstDecisionId, NOW.plusSeconds(5));
 
-            int secondRows = repository.recordDecision(
-                    requestId, DecisionResult.REJECTED, UUID.randomUUID(), NOW.plusSeconds(10));
+            int secondRows = repository.completeWithDecision(requestId, SETTLED_SIGNALS_JSON,
+                    DecisionResult.REJECTED.name(), UUID.randomUUID(), NOW.plusSeconds(10));
 
             assertThat(secondRows)
-                    .as("guard: decisionResult IS NULL prevents a second write")
+                    .as("guard: decision_result IS NULL prevents a second write")
                     .isZero();
 
             // Confirm the first decision survived intact.
@@ -197,8 +206,9 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void returnsZero_whenRequestIdDoesNotExist() {
-            int rows = repository.recordDecision(
-                    UUID.randomUUID(), DecisionResult.APPROVED, UUID.randomUUID(), NOW);
+            int rows = repository.completeWithDecision(
+                    UUID.randomUUID(), SETTLED_SIGNALS_JSON,
+                    DecisionResult.APPROVED.name(), UUID.randomUUID(), NOW);
 
             assertThat(rows).isZero();
         }
@@ -235,7 +245,8 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         void excludesFullySettledRequests() {
             var requestId = UUID.randomUUID();
             repository.saveAndFlush(TestEntityFactory.creditCard(requestId, NOW, TIMEOUT));
-            repository.recordDecision(requestId, DecisionResult.APPROVED, UUID.randomUUID(), NOW.plusSeconds(5));
+            repository.completeWithDecision(requestId, "{}",
+                    DecisionResult.APPROVED.name(), UUID.randomUUID(), NOW.plusSeconds(5));
 
             var results = repository.findPendingTimeouts(TIMEOUT.plusSeconds(1));
 

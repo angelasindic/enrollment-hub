@@ -10,19 +10,16 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 class EnrollmentResponseTest {
 
     @Test
-    void acceptedFactorySetsStatusAccepted() {
-        UUID id = UUID.randomUUID();
-        EnrollmentResponse response = new EnrollmentResponse(id, EnrollmentResponse.Status.ACCEPTED);
+    void carriesEnrollmentId() {
+        String id = UUID.randomUUID().toString();
 
-        assertThat(response.requestId()).isEqualTo(id);
-        assertThat(response.status()).isEqualTo(EnrollmentResponse.Status.ACCEPTED);
+        EnrollmentResponse response = new EnrollmentResponse(id);
+
+        assertThat(response.enrollmentId()).isEqualTo(id);
     }
 
     @Test
-    void rejectsNullFields() {
-        assertThatNullPointerException().isThrownBy(() ->
-                new EnrollmentResponse(null, EnrollmentResponse.Status.ACCEPTED));
-        assertThatNullPointerException().isThrownBy(() ->
-                new EnrollmentResponse(UUID.randomUUID(), null));
+    void rejectsNullEnrollmentId() {
+        assertThatNullPointerException().isThrownBy(() -> new EnrollmentResponse(null));
     }
 }

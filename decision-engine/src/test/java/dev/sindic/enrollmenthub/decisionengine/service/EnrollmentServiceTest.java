@@ -76,7 +76,7 @@ class EnrollmentServiceTest {
                 .contains("\"HIGH\"")
                 .contains("\"FRAUD_CHECK\"")
                 .contains("\"PENDING\"");
-        then(repository).should(never()).recordDecision(any(), any(), any(), any());
+        then(repository).should(never()).completeWithDecision(any(), any(), any(), any(), any());
         then(publisher).should(never()).publish(any());
     }
 
@@ -87,25 +87,30 @@ class EnrollmentServiceTest {
         var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
         entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
-        given(repository.updateSignals(eq(requestId), anyString())).willReturn(1);
-        given(repository.recordDecision(eq(requestId), any(), any(), any())).willReturn(1);
+        given(repository.completeWithDecision(eq(requestId), anyString(), any(), any(), any())).willReturn(1);
 
         // WHEN geo settles LOW — both signals now settled, decision fires.
         service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.LOW));
 
-        // THEN signals UPDATE + decision UPDATE + publish.
-        then(repository).should().updateSignals(eq(requestId), anyString());
+        // THEN a single combined UPDATE writes signals + decision; no separate updateSignals.
+        then(repository).should(never()).updateSignals(any(), any());
 
-        var decisionResultCaptor = ArgumentCaptor.forClass(DecisionResult.class);
+        var signalsJsonCaptor = ArgumentCaptor.forClass(String.class);
+        var decisionResultCaptor = ArgumentCaptor.forClass(String.class);
         var decisionIdCaptor = ArgumentCaptor.forClass(UUID.class);
         var decidedAtCaptor = ArgumentCaptor.forClass(Instant.class);
-        then(repository).should().recordDecision(
+        then(repository).should().completeWithDecision(
                 eq(requestId),
+                signalsJsonCaptor.capture(),
                 decisionResultCaptor.capture(),
                 decisionIdCaptor.capture(),
                 decidedAtCaptor.capture());
-        assertThat(decisionResultCaptor.getValue()).isEqualTo(DecisionResult.APPROVED);
+        assertThat(signalsJsonCaptor.getValue())
+                .as("combined UPDATE carries the post-transition signal map")
+                .contains("\"GEO_SCORE\"").contains("\"SETTLED\"").contains("\"LOW\"")
+                .contains("\"FRAUD_CHECK\"").contains("\"OK\"");
+        assertThat(decisionResultCaptor.getValue()).isEqualTo(DecisionResult.APPROVED.name());
         assertThat(decisionIdCaptor.getValue()).isNotNull();
         assertThat(decidedAtCaptor.getValue()).isEqualTo(FIXED_CLOCK.instant());
 
@@ -134,7 +139,7 @@ class EnrollmentServiceTest {
 
         // No write, no decision, no publish — silent idempotent return.
         then(repository).should(never()).updateSignals(any(), any());
-        then(repository).should(never()).recordDecision(any(), any(), any(), any());
+        then(repository).should(never()).completeWithDecision(any(), any(), any(), any(), any());
         then(publisher).should(never()).publish(any());
     }
 
@@ -169,22 +174,21 @@ class EnrollmentServiceTest {
                 .hasMessageContaining(requestId.toString())
                 .hasMessageContaining("0");
 
-        then(repository).should(never()).recordDecision(any(), any(), any(), any());
+        then(repository).should(never()).completeWithDecision(any(), any(), any(), any(), any());
         then(publisher).should(never()).publish(any());
     }
 
     @Test
-    void recordSignalResult_skipsPublishWhenRecordDecisionAffectsZeroRows() {
-        // Edge case: the recordDecision guard (decisionResult IS NULL) rejected
-        // the write, meaning a parallel path already recorded the decision.
+    void recordSignalResult_skipsPublishWhenCompleteWithDecisionAffectsZeroRows() {
+        // Edge case: the decision_result IS NULL guard rejected the combined
+        // UPDATE, meaning a parallel path already recorded the decision.
         // Under our PESSIMISTIC_WRITE lock this is structurally impossible,
         // but if it does happen we must not double-publish.
         var requestId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
         entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
-        given(repository.updateSignals(eq(requestId), anyString())).willReturn(1);
-        given(repository.recordDecision(eq(requestId), any(), any(), any())).willReturn(0);
+        given(repository.completeWithDecision(eq(requestId), anyString(), any(), any(), any())).willReturn(0);
 
         service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.LOW));
@@ -195,13 +199,12 @@ class EnrollmentServiceTest {
     @Test
     void recordSignalResult_propagatesPublisherFailure_soTxRollsBack() {
         // Inside the @Transactional method a publisher exception rolls back the
-        // explicit UPDATEs we just issued — that's the ADR-015 contract.
+        // explicit UPDATE we just issued — that's the ADR-015 contract.
         var requestId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(requestId, NOW, TIMEOUT);
         entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
         given(repository.findByRequestIdForUpdate(requestId)).willReturn(Optional.of(entity));
-        given(repository.updateSignals(eq(requestId), anyString())).willReturn(1);
-        given(repository.recordDecision(eq(requestId), any(), any(), any())).willReturn(1);
+        given(repository.completeWithDecision(eq(requestId), anyString(), any(), any(), any())).willReturn(1);
         doThrow(new RuntimeException("broker down")).when(publisher).publish(any());
 
         assertThatThrownBy(() -> service.recordSignalResult(requestId, SignalConfig.GEO_SCORE,

@@ -100,7 +100,9 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
             repository.save(TestEntityFactory.creditCard(pending, CREATED_AT, EXPIRED_OLDER));
             repository.save(TestEntityFactory.creditCard(decided, CREATED_AT, EXPIRED_OLDER));
             // Mark the second row as decided via the production write path (ADR-015 §Write path).
-            repository.recordDecision(decided, DecisionResult.APPROVED, UUID.randomUUID(), NOW.minusSeconds(5));
+            // Signals JSON is irrelevant for the SKIP-LOCKED claim filter — only decision_result matters.
+            repository.completeWithDecision(decided, "{}",
+                    DecisionResult.APPROVED.name(), UUID.randomUUID(), NOW.minusSeconds(5));
         });
 
         List<EnrollmentEntity> claimed = txTemplate.execute(tx ->

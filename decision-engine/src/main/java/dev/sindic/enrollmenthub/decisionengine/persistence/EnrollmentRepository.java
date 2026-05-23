@@ -78,27 +78,39 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                       @Param("signalsJson") String signalsJson);
 
     /**
-     * Records the final decision: sets {@code decisionResult}, {@code decisionId},
-     * and {@code decidedAt} in one statement, guarded by
-     * {@code decisionResult IS NULL} so a second caller cannot overwrite a
-     * decision that has already been recorded. Returns {@code 0} on that guard
-     * (caller skips the publish path) and {@code 1} on success.
+     * Single-statement completion: writes the final signals JSON together with the
+     * decision columns ({@code decisionResult}, {@code decisionId},
+     * {@code decidedAt}). Used when the just-applied signal transition completes
+     * the process — collapses what would otherwise be two UPDATEs into one and
+     * removes the intra-row state where signals are settled but the decision is
+     * still NULL.
      *
-     * <p>JPQL (not native) — the columns are scalar, no JSONB cast required.
+     * <p>Guarded by {@code decisionResult IS NULL} so a second caller racing on
+     * the same row cannot overwrite a decision that has already been recorded.
+     * Returns {@code 0} on that guard (caller skips the publish path) and
+     * {@code 1} on success.
+     *
+     * <p>Native query because PostgreSQL needs the explicit {@code ::jsonb} cast
+     * on the signals parameter (same reason as {@link #updateSignals}).
      */
     @Modifying
-    @Query("""
-            UPDATE EnrollmentEntity e
-               SET e.decisionResult = :decisionResult,
-                   e.decisionId     = :decisionId,
-                   e.decidedAt      = :decidedAt
-             WHERE e.requestId      = :requestId
-               AND e.decisionResult IS NULL
-            """)
-    int recordDecision(@Param("requestId") UUID requestId,
-                       @Param("decisionResult") DecisionResult decisionResult,
-                       @Param("decisionId") UUID decisionId,
-                       @Param("decidedAt") Instant decidedAt);
+    @Query(value = """
+            UPDATE enrollment_hub.enrollments
+               SET signals         = CAST(:signalsJson AS jsonb),
+                   decision_result = :decisionResult,
+                   decision_id     = :decisionId,
+                   decided_at      = :decidedAt
+             WHERE request_id      = :requestId
+               AND decision_result IS NULL
+            """, nativeQuery = true)
+    int completeWithDecision(@Param("requestId") UUID requestId,
+                             @Param("signalsJson") String signalsJson,
+                             // Bound as String, not the enum, because native queries lack
+                             // the @Enumerated(STRING) metadata that JPQL infers from the
+                             // entity field — default native binding would send the ordinal.
+                             @Param("decisionResult") String decisionResult,
+                             @Param("decisionId") UUID decisionId,
+                             @Param("decidedAt") Instant decidedAt);
 
     /**
      * Atomically claims a batch of expired-and-undecided correlation rows for the

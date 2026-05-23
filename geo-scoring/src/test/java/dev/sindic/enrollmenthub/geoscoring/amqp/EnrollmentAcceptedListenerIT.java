@@ -4,7 +4,7 @@ import dev.sindic.enrollmenthub.contracts.domain.Address;
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentAccepted;
+import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
 import dev.sindic.enrollmenthub.contracts.events.GeoScoreResult;
 import dev.sindic.enrollmenthub.geoscoring.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.geoscoring.service.GeocodingService;
@@ -22,6 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -56,35 +57,35 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
 
     @Test
     void handleEnrollmentAccepted_publishesGeoScoreResult() {
-        var requestId = UUID.randomUUID();
+        var enrollmentId = UUID.randomUUID();
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.ROUTING_KEY,
-                new EnrollmentAccepted(requestId, enrollmentData("MC")));
+                new EnrollmentEvent(Instant.now(), enrollmentData("MC", enrollmentId)));
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(requestId);
+            assertThat(result.requestId()).isEqualTo(enrollmentId);
             assertThat(result.neighborCounts()).isNotNull();
         });
     }
 
     @Test
     void handleEnrollmentAccepted_preservesCorrelationId() {
-        var requestId = UUID.randomUUID();
+        var enrollmentId = UUID.randomUUID();
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.ROUTING_KEY,
-                new EnrollmentAccepted(requestId, enrollmentData("MC")));
+                new EnrollmentEvent(Instant.now(), enrollmentData("MC", enrollmentId)));
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(requestId);
+            assertThat(result.requestId()).isEqualTo(enrollmentId);
         });
     }
 
     @Test
     void handleEnrollmentAccepted_invoiceRouteNotDelivered() {
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, "enrollment.created.invoice",
-                new EnrollmentAccepted(UUID.randomUUID(), enrollmentData("MC")));
+                new EnrollmentEvent(Instant.now(), enrollmentData("MC", UUID.randomUUID())));
 
         verify(listener, after(500).never()).handleEnrollmentAccepted(any());
     }
@@ -110,14 +111,14 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
                 .doCallRealMethod()
                 .when(listener).handleEnrollmentAccepted(any());
 
-        var requestId = UUID.randomUUID();
+        var enrollmentId = UUID.randomUUID();
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.ROUTING_KEY,
-                new EnrollmentAccepted(requestId, enrollmentData("MC")));
+                new EnrollmentEvent(Instant.now(), enrollmentData("MC", enrollmentId)));
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(requestId);
+            assertThat(result.requestId()).isEqualTo(enrollmentId);
         });
 
         var dlqMessage = rabbitTemplate.receive(AmqpConfig.DLQ, 200);
@@ -128,14 +129,14 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
     void geocodingFailure_emitsNullRiskLevelWithReason() {
         doReturn(Optional.empty()).when(geocodingService).resolve(any());
 
-        var requestId = UUID.randomUUID();
+        var enrollmentId = UUID.randomUUID();
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.ROUTING_KEY,
-                new EnrollmentAccepted(requestId, enrollmentData("MC")));
+                new EnrollmentEvent(Instant.now(), enrollmentData("MC", enrollmentId)));
 
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
             var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
-            assertThat(result.requestId()).isEqualTo(requestId);
+            assertThat(result.requestId()).isEqualTo(enrollmentId);
             assertThat(result.riskLevel()).isNull();
             assertThat(result.noResultReason()).isEqualTo("geocoding_failed");
             assertThat(result.latitude()).isNull();
@@ -164,9 +165,9 @@ class EnrollmentAcceptedListenerIT extends BaseIntegrationTest {
         rabbitAdmin.purgeQueue(AmqpConfig.DLQ, false);
     }
 
-    private static EnrollmentData enrollmentData(String countryCode) {
+    private static EnrollmentData enrollmentData(String countryCode, UUID id) {
         var person = new Person("Jane", "Doe", "jane@example.com", "+491234567890");
         var address = new Address(List.of("Avenue de Monte-Carlo"), "98000", "Monaco", null, countryCode);
-        return new EnrollmentData(PaymentType.CREDIT_CARD, person, address, address);
+        return new EnrollmentData(id, PaymentType.CREDIT_CARD, person, address, address);
     }
 }

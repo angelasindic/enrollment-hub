@@ -3,7 +3,6 @@ package dev.sindic.enrollmenthub.decisionengine.amqp;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.service.UnknownCorrelationException;
 import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Binding;
@@ -42,14 +41,7 @@ import java.time.Duration;
  *
  * <h2>Consumer-owned bindings (ADR-003 §Consumer-owned bindings)</h2>
  * The decision-engine <b>does not</b> declare consumer queues or bindings. Each
- * worker service owns its queue and binds it to the shared exchange. Known
- * bindings at the time of writing:
- * <pre>
- *   Exchange         Routing key                     Queue                    Owner
- *   ─────────────    ──────────────────────────      ─────────────────────    ───────────────
- *   enrollment.events   enrollment.created.credit_card     geo.scoring.queue        geo-scoring
- *   enrollment.events   enrollment.created.*               fraud.detection.queue    fraud-detection (phase 2)
- * </pre>
+ * worker service owns its queue and binds it to the shared exchange.
  * Adding a new worker means declaring a queue + binding in that worker's AMQP
  * config. No decision-engine change is required — the topic exchange is the router.
  */
@@ -58,7 +50,12 @@ import java.time.Duration;
 @EnableConfigurationProperties(AmqpProperties.class)
 public class AmqpConfig {
 
-    static final String PUBLISH_FAILURE_METRIC = "decisionengine_publish_failures_total";
+
+    public static final String ENROLLMENT_INTAKE_EXCHANGE         = "enrollment.intake";
+    public static final String ENROLLMENT_INTAKE_QUEUE            = "enrollment.intake.queue";
+    static final String ENROLLMENT_INTAKE_DLX         = "enrollment.intake.dlx";
+    static final String ENROLLMENT_INTAKE_DLQ         = "enrollment.intake.queue.dlq";
+    static final String ENROLLMENT_INTAKE_DLQ_RK      = "enrollment.intake.dead-letter";
 
     public static final String EXCHANGE                = "enrollment.events";
     public static final String ROUTING_KEY_CREDIT_CARD = "enrollment.created.credit_card";
@@ -68,6 +65,8 @@ public class AmqpConfig {
 
     public static final String DECISION_EXCHANGE    = "enrollment.decisions";
     public static final String DECISION_ROUTING_KEY = "enrollment.decision.completed";
+
+    static final String PUBLISH_FAILURE_METRIC = "decisionengine_publish_failures_total";
 
     // --- Geo-score result consumer topology ---
 
@@ -88,6 +87,46 @@ public class AmqpConfig {
             case CREDIT_CARD -> ROUTING_KEY_CREDIT_CARD;
             case INVOICE     -> ROUTING_KEY_INVOICE;
         };
+    }
+
+    @Bean
+    TopicExchange intakeExchange() {
+        return ExchangeBuilder.topicExchange(ENROLLMENT_INTAKE_EXCHANGE).durable(true).build();
+    }
+
+    @Bean
+    Queue intakeQueue() {
+        return QueueBuilder.durable(ENROLLMENT_INTAKE_QUEUE)
+                .deadLetterExchange(ENROLLMENT_INTAKE_DLX)
+                .deadLetterRoutingKey(ENROLLMENT_INTAKE_DLQ_RK)
+                .build();
+    }
+
+    @Bean
+    DirectExchange intakeDlx() {
+        return new DirectExchange(ENROLLMENT_INTAKE_DLX, true, false);
+    }
+
+    @Bean
+    Queue intakeDlq() {
+        return QueueBuilder.durable(ENROLLMENT_INTAKE_DLQ).build();
+    }
+
+    @Bean
+    Binding intakeDlqBinding(Queue intakeDlq, DirectExchange intakeDlx) {
+        return BindingBuilder.bind(intakeDlq).to(intakeDlx).with(ENROLLMENT_INTAKE_DLQ_RK);
+    }
+
+    /**
+     * Routes every intake publish to the single intake queue. {@code EnrollmentIntakePublisher}
+     * uses the same per-payment-type routing keys ({@link #ROUTING_KEY_CREDIT_CARD},
+     * {@link #ROUTING_KEY_INVOICE}) on the intake exchange that the events exchange uses,
+     * but the intake topology has just one queue — no fan-out — so the binding pattern
+     * catches both keys via {@code enrollment.created.*}.
+     */
+    @Bean
+    Binding intakeBinding(Queue intakeQueue, TopicExchange intakeExchange) {
+        return BindingBuilder.bind(intakeQueue).to(intakeExchange).with("enrollment.created.*");
     }
 
     /**
@@ -206,22 +245,6 @@ public class AmqpConfig {
     @Bean
     Binding geoScoreBinding(Queue geoScoreQueue, TopicExchange enrollmentExchange) {
         return BindingBuilder.bind(geoScoreQueue).to(enrollmentExchange).with(GEO_SCORE_ROUTING_KEY);
-    }
-
-    @Bean
-    Gauge geoScoreDlqDepthGauge(RabbitTemplate rabbitTemplate, MeterRegistry meterRegistry) {
-        return Gauge.builder("rabbitmq.dlq.depth", rabbitTemplate, template -> {
-                    try {
-                        var ok = template.execute(ch -> ch.queueDeclarePassive(GEO_SCORE_DLQ));
-                        return ok != null ? (double) ok.getMessageCount() : 0.0;
-                    } catch (Exception e) {
-                        log.warn("Could not poll DLQ depth queue={}", GEO_SCORE_DLQ);
-                        return 0.0;
-                    }
-                })
-                .tag("queue", GEO_SCORE_DLQ)
-                .description("Messages waiting in the decision-engine geo-score dead-letter queue")
-                .register(meterRegistry);
     }
 
     @Bean

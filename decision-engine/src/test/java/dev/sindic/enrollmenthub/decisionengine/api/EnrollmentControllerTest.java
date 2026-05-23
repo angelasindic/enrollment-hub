@@ -1,7 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine.api;
 
 import dev.sindic.enrollmenthub.decisionengine.domain.PendingEnrollmentResponse;
-import dev.sindic.enrollmenthub.decisionengine.service.CreateEnrollmentService;
+import dev.sindic.enrollmenthub.decisionengine.service.EnrollmentIntakeService;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,20 +37,19 @@ class EnrollmentControllerTest {
     ObjectMapper objectMapper;
 
     @MockitoBean
-    CreateEnrollmentService enrollmentService;
+    EnrollmentIntakeService enrollmentService;
 
     @Test
-    void returns202WithRequestIdAndAcceptedStatus() throws Exception {
-        UUID requestId = UUID.randomUUID();
-        given(enrollmentService.createEnrollment(any()))
-                .willReturn(PendingEnrollmentResponse.accepted(requestId));
+    void returns202WithEnrollmentId() throws Exception {
+        UUID enrollmentId = UUID.randomUUID();
+        given(enrollmentService.receiveEnrollment(any()))
+                .willReturn(new PendingEnrollmentResponse(enrollmentId.toString()));
 
         mockMvc.perform(post(ENDPOINT)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validBody())))
                 .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.status").value("ACCEPTED"))
-                .andExpect(jsonPath("$.requestId").value(matchesPattern(UUID_REGEX)));
+                .andExpect(jsonPath("$.enrollmentId").value(matchesPattern(UUID_REGEX)));
     }
 
     @Test

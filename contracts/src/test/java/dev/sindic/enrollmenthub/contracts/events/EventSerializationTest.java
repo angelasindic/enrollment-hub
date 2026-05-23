@@ -4,7 +4,6 @@ import dev.sindic.enrollmenthub.contracts.domain.Address;
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
-import dev.sindic.enrollmenthub.contracts.events.*;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.Test;
@@ -34,50 +33,53 @@ class EventSerializationTest {
     }
 
     private static EnrollmentData enrollmentData(PaymentType paymentType) {
-        return new EnrollmentData(paymentType, person(), address("DE"), address("DE"));
+        return new EnrollmentData(UUID.randomUUID(), paymentType, person(), address("DE"), address("DE"));
     }
 
-    // ── EnrollmentAccepted ────────────────────────────────────────────────────
+    private static final Instant FIXED_CREATED_AT = Instant.parse("2026-05-23T10:00:00Z");
+
+    // ── EnrollmentEvent ───────────────────────────────────────────────────────
 
     @Test
-    void enrollmentAccepted_roundTrip() throws Exception {
-        var original = new EnrollmentAccepted(UUID.randomUUID(), enrollmentData(PaymentType.CREDIT_CARD));
+    void enrollmentEvent_roundTrip() throws Exception {
+        var original = new EnrollmentEvent(FIXED_CREATED_AT, enrollmentData(PaymentType.CREDIT_CARD));
         var json = mapper.writeValueAsString(original);
-        var deserialized = mapper.readValue(json, EnrollmentAccepted.class);
+        var deserialized = mapper.readValue(json, EnrollmentEvent.class);
         assertEquals(original, deserialized);
     }
 
     @Test
-    void enrollmentAccepted_invoiceRoute_roundTrip() throws Exception {
-        var original = new EnrollmentAccepted(UUID.randomUUID(), enrollmentData(PaymentType.INVOICE));
+    void enrollmentEvent_invoiceRoute_roundTrip() throws Exception {
+        var original = new EnrollmentEvent(FIXED_CREATED_AT, enrollmentData(PaymentType.INVOICE));
         var json = mapper.writeValueAsString(original);
-        var deserialized = mapper.readValue(json, EnrollmentAccepted.class);
+        var deserialized = mapper.readValue(json, EnrollmentEvent.class);
         assertEquals(original, deserialized);
     }
 
     @Test
-    void enrollmentAccepted_nullRequestId_throws() {
+    void enrollmentEvent_nullCreatedAt_throws() {
         assertThrows(NullPointerException.class,
-                () -> new EnrollmentAccepted(null, enrollmentData(PaymentType.INVOICE)));
+                () -> new EnrollmentEvent(null, enrollmentData(PaymentType.INVOICE)));
     }
 
     @Test
-    void enrollmentAccepted_nullEnrollmentData_throws() {
+    void enrollmentEvent_nullEnrollmentData_throws() {
         assertThrows(NullPointerException.class,
-                () -> new EnrollmentAccepted(UUID.randomUUID(), null));
+                () -> new EnrollmentEvent(FIXED_CREATED_AT, null));
     }
 
     @Test
-    void enrollmentAccepted_unknownFieldsIgnored() throws Exception {
+    void enrollmentEvent_unknownFieldsIgnored() throws Exception {
         String json = """
-                {"requestId":"%s",
-                 "enrollmentData":{"paymentType":"CREDIT_CARD",
+                {"createdAt":"2026-05-23T10:00:00Z",
+                 "enrollmentData":{"enrollmentId":"%s",
+                                "paymentType":"CREDIT_CARD",
                                 "person":{"emailAddress":"test@example.com"},
                                 "shippingAddress":{"countryCode":"DE"},
                                 "billingAddress":{"countryCode":"DE"}},
                  "unknownFutureField":"ignored"}
                 """.formatted(UUID.randomUUID());
-        assertDoesNotThrow(() -> mapper.readValue(json, EnrollmentAccepted.class));
+        assertDoesNotThrow(() -> mapper.readValue(json, EnrollmentEvent.class));
     }
 
     // ── EnrollmentData ────────────────────────────────────────────────────────
@@ -93,7 +95,7 @@ class EventSerializationTest {
     @Test
     void enrollmentData_nullPaymentType_throws() {
         assertThrows(NullPointerException.class,
-                () -> new EnrollmentData(null, person(), address("DE"), address("DE")));
+                () -> new EnrollmentData(UUID.randomUUID(), null, person(), address("DE"), address("DE")));
     }
 
     // ── Address ───────────────────────────────────────────────────────────────
