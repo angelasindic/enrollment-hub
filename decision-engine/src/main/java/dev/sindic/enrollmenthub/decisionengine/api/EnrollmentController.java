@@ -26,7 +26,7 @@ import java.util.UUID;
 /**
  * Entry point for the enrollment flow.
  * <p>
- * Accepts {@link EnrollmentRequest}, mints a correlation {@code requestId},
+ * Accepts {@link EnrollmentRequest}, mints a correlation {@code enrollmentId},
  * and responds immediately with {@code 202 Accepted}.
  * This controller establishes the HTTP contract.
  */
@@ -50,7 +50,7 @@ public class EnrollmentController {
                     The request is routed by payment type — credit card requests trigger \
                     geo-scoring, invoice requests trigger identity verification, and both \
                     routes trigger fraud detection. \
-                    Returns immediately with a correlation requestId; the final \
+                    Returns immediately with a correlation enrollmentId; the final \
                     EnrollmentDecisionEvent is delivered asynchronously.""",
             responses = {
                     @ApiResponse(

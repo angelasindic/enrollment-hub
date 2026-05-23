@@ -66,7 +66,7 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
 
         assertThat(claimed)
                 .as("ORDER BY timeoutAt ASC — oldest deadline first")
-                .extracting(EnrollmentEntity::getRequestId)
+                .extracting(EnrollmentEntity::getEnrollmentId)
                 .containsExactly(older, newer);
     }
 
@@ -87,7 +87,7 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
 
         assertThat(firstBatch)
                 .as("PageRequest.ofSize(2) → exactly two rows, ordered by timeoutAt ASC")
-                .extracting(EnrollmentEntity::getRequestId)
+                .extracting(EnrollmentEntity::getEnrollmentId)
                 .containsExactly(first, second);
     }
 
@@ -110,7 +110,7 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
 
         assertThat(claimed)
                 .as("WHERE decisionResult IS NULL — decided rows must not be claimed")
-                .extracting(EnrollmentEntity::getRequestId)
+                .extracting(EnrollmentEntity::getEnrollmentId)
                 .containsExactly(pending)
                 .doesNotContain(decided);
     }
@@ -130,7 +130,7 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
 
         assertThat(claimed)
                 .as("WHERE timeoutAt <= now — rows with future deadlines must not be claimed")
-                .extracting(EnrollmentEntity::getRequestId)
+                .extracting(EnrollmentEntity::getEnrollmentId)
                 .containsExactly(expired);
     }
 
@@ -161,7 +161,7 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
         Thread t1 = new Thread(() -> {
             try {
                 txTemplate.executeWithoutResult(tx -> {
-                    repository.findByRequestIdForUpdate(locked)
+                    repository.findByEnrollmentIdForUpdate(locked)
                             .orElseThrow(() -> new IllegalStateException("locked row not found"));
                     t1HoldsLock.countDown();
                     try {
@@ -196,7 +196,7 @@ class SkipLockedClaimIT extends BaseIntegrationTest {
 
         assertThat(claimed)
                 .as("SKIP LOCKED — locked row is skipped; only the unlocked one is claimed")
-                .extracting(EnrollmentEntity::getRequestId)
+                .extracting(EnrollmentEntity::getEnrollmentId)
                 .containsExactly(claimable);
 
         if (t1Failure.get() != null) {

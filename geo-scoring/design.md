@@ -5,10 +5,10 @@
 **Consumes:** `EnrollmentAccepted` events delivered to the durable queue `geo.scoring.queue`, bound to the shared
 topic exchange `enrollment.events` with routing key `enrollment.created.credit_card`. The binding is restricted to
 the credit-card route (ADR-003); invoice-route enrollments never reach geo-scoring. The listener
-(`EnrollmentAcceptedListener`) extracts the shipping address from `enrollmentData` and the correlation `requestId`.
+(`EnrollmentAcceptedListener`) extracts the shipping address from `enrollmentData` and the correlation `enrollmentId`.
 
 **Produces:** `GeoScoreResult` events published to the same `enrollment.events` exchange with routing key
-`geo.score.completed`. The event carries the `requestId` (for correlation by the decision engine), the resolved
+`geo.score.completed`. The event carries the `enrollmentId` (for correlation by the decision engine), the resolved
 `RiskLevel` (`LOW` / `MEDIUM` / `HIGH` / `EXTREME`, or `null` on geocoding failure), per-radius neighbour counts,
 the list of triggered radii, the geocoded `(latitude, longitude)` when available, and a `noResultReason` string
 when `riskLevel` is null.
@@ -30,13 +30,13 @@ and freshness trade-offs alone. A cache hit means "we've geocoded this address b
 scored."
 
 **Geo-index** — country-partitioned Redis GEO sorted sets, keyed `geo:{countryCode}` (e.g. `geo:DE`). Each ZSET member
-is a `requestId` (the per-enrollment correlation UUID — see ADR-014); its score is the 52-bit geohash of the
+is a `enrollmentId` (the per-enrollment correlation UUID — see ADR-014); its score is the 52-bit geohash of the
 enrollment's `(lon, lat)` computed by `GEOADD`. Coordinates are therefore encoded into the score rather than stored
 as a separate value — `GEOPOS` reverses the geohash back to approximate coordinates, and `GEOSEARCH` exploits the
 fact that geohash-adjacent scores correspond to geographically nearby points. Member uniqueness is per
-`(key, requestId)`: an idempotent retry of the same request overwrites (moves) its point, but two distinct
+`(key, enrollmentId)`: an idempotent retry of the same request overwrites (moves) its point, but two distinct
 enrollments at the same building coexist as separate members with near-identical scores — which is precisely the
-density signal the service detects. Because each enrollment carries a fresh `requestId`, a single account that
+density signal the service detects. Because each enrollment carries a fresh `enrollmentId`, a single account that
 enrolls twice within the TTL window appears as two separate members. Purpose: density detection. Contains
 enrollment identifiers linked to locations with implicit temporal information (48-hour TTL). This *is* personal
 data — the combination of an identifiable enrollment, a location, and a time window. The 48-hour TTL (ADR-004)
@@ -44,7 +44,7 @@ provides automatic expiration; ±5m Laplacian noise on coordinates is described 
 architecture.md §8.2 but is **not implemented in v0** — current density detection runs on exact geocoded coordinates.
 
 **TTL companion sorted set** — plain Redis sorted set (not a GEO set), keyed `{prefix}:{countryCode}:ttl` (default:
-`geo:DE:ttl`). Each member is the same `requestId` that appears in the geo-index for that country; the score is the
+`geo:DE:ttl`). Each member is the same `enrollmentId` that appears in the geo-index for that country; the score is the
 **insertion epoch in seconds**. It exists solely to track per-member age so the geo-index can honour a per-member TTL
 (Redis GEO sorted sets have no native per-member expiry — a key-level TTL would expire the entire country partition at
 once, which is not the intended behaviour). The companion set mirrors the geo-index's membership but carries no
@@ -130,8 +130,8 @@ for each radius in [100, 250, 500]:
     count = #GEOSEARCH KEYS[1] FROMLONLAT lon lat BYRADIUS radius m ASC COUNT 200
     → return count
 
-GEOADD KEYS[1] lon lat requestId     -- index the new point
-ZADD   KEYS[2] epoch    requestId    -- record insertion time for per-member TTL
+GEOADD KEYS[1] lon lat enrollmentId     -- index the new point
+ZADD   KEYS[2] epoch    enrollmentId    -- record insertion time for per-member TTL
 ```
 
 The score-before-index ordering is preserved *within* the atomic script: GEOSEARCH runs first (avoiding self-counting),
@@ -193,7 +193,7 @@ Re-tune against that document, not against intuition.
 
 **Step 5 — Emit Result**
 
-`GeoScoreResult` event (see `contracts/events/GeoScoreResult.java`) containing: `requestId`, `riskLevel`
+`GeoScoreResult` event (see `contracts/events/GeoScoreResult.java`) containing: `enrollmentId`, `riskLevel`
 (`LOW` / `MEDIUM` / `HIGH` / `EXTREME`, or `null` on geocoding failure), `noResultReason` (non-null only when
 `riskLevel` is null, e.g. `"geocoding_failed"`), `neighborCounts` per radius, `triggeredThresholds`, `latitude`,
 `longitude`.
@@ -287,7 +287,7 @@ ADR-003 §Consumer concurrency for the cross-service sizing rationale.
 **Redis failures** in the Lua script path *are* exceptions. `GeoIndexService.checkAndIndex` catches
 `DataAccessException`, logs it, and re-throws unchanged so the retry chain handles transient outages. The Lua
 script's atomicity guarantees that a mid-execution failure leaves the index in its pre-call state — retries are
-safe and idempotent for the same `requestId` (member uniqueness in the GEO sorted set means a retry overwrites
+safe and idempotent for the same `enrollmentId` (member uniqueness in the GEO sorted set means a retry overwrites
 rather than duplicates).
 
 **Outbound (publisher side, `GeoScoreResultPublisher`).** The RabbitTemplate is configured with publisher confirms
@@ -301,7 +301,7 @@ modes increment the `geo_scoring_publish_failures_total` counter (tagged `reason
 |---|---|---|
 | `geo_scoring_publish_failures_total{reason=nack\|returned}` | `AmqpConfig` counters | Publisher-side broker failures. Alert on non-zero. |
 | `rabbitmq.dlq.depth{queue=geo.scoring.queue.dlq}` | `AmqpConfig` gauge | DLQ backlog. Steady-state should be zero. |
-| `requestId` MDC key | `EnrollmentAcceptedListener` | Set on entry, cleared in `finally`. Carried into all SLF4J log lines emitted while handling the event. |
+| `enrollmentId` MDC key | `EnrollmentAcceptedListener` | Set on entry, cleared in `finally`. Carried into all SLF4J log lines emitted while handling the event. |
 | `Density check key=… neighborCounts=… triggered=… truncated=…` | `GeoIndexService.checkAndIndex` | One INFO line per evaluated address. |
 | `Geocoding cache hit key=…` / `miss — resolving via provider address=…` | `GeocodingCacheService` / `GeocodingService` | Per-lookup cache outcome. |
 | `Geo-index cleanup complete totalRemoved=…` | `GeoIndexCleanupJob.cleanup` | One INFO line per scheduled run. Silence = job stopped. |

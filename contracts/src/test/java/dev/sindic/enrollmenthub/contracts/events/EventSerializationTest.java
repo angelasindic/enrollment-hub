@@ -155,7 +155,7 @@ class EventSerializationTest {
     }
 
     @Test
-    void geoScoreResult_nullRequestId_throws() {
+    void geoScoreResult_nullEnrollmentId_throws() {
         assertThrows(NullPointerException.class,
                 () -> new GeoScoreResult(null, RiskLevel.LOW, null, Map.of(), List.of(), null, null));
     }
@@ -188,7 +188,7 @@ class EventSerializationTest {
     }
 
     @Test
-    void fraudCheckResult_nullRequestId_throws() {
+    void fraudCheckResult_nullEnrollmentId_throws() {
         assertThrows(NullPointerException.class,
                 () -> new FraudCheckResult(null, SignalOutcome.OK));
     }

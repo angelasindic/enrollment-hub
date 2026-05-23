@@ -44,18 +44,18 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
     @Test
     void handleGeoScoreResult_updatesCorrelationRecord() {
-        var requestId = UUID.randomUUID();
-        seedCreditCardRequest(requestId);
+        var enrollmentId = UUID.randomUUID();
+        seedCreditCardRequest(enrollmentId);
 
         var event = new GeoScoreResult(
-                requestId, C_HIGH, null,
+                enrollmentId, C_HIGH, null,
                 Map.of(100, 5, 250, 12), List.of(100, 250),
                 48.8566, 2.3522);
 
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var entity = repository.findById(requestId).orElseThrow();
+            var entity = repository.findById(enrollmentId).orElseThrow();
             assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())
                     .isEqualTo(SignalProcessingState.SETTLED);
             assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel())
@@ -65,35 +65,35 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
     @Test
     void duplicateDelivery_isIdempotentNoOp() {
-        var requestId = UUID.randomUUID();
-        seedCreditCardRequest(requestId);
+        var enrollmentId = UUID.randomUUID();
+        seedCreditCardRequest(enrollmentId);
 
         var event = new GeoScoreResult(
-                requestId, C_LOW, null,
+                enrollmentId, C_LOW, null,
                 Map.of(), List.of(), 52.52, 13.405);
 
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var entity = repository.findById(requestId).orElseThrow();
+            var entity = repository.findById(enrollmentId).orElseThrow();
             assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel())
                     .isEqualTo(RiskLevel.LOW);
         });
 
         var duplicate = new GeoScoreResult(
-                requestId, C_HIGH, null,
+                enrollmentId, C_HIGH, null,
                 Map.of(100, 99), List.of(100), 52.52, 13.405);
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, duplicate);
 
         await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            var entity = repository.findById(requestId).orElseThrow();
+            var entity = repository.findById(enrollmentId).orElseThrow();
             assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel())
                     .isEqualTo(RiskLevel.LOW);
         });
     }
 
     @Test
-    void unknownRequestId_routedToDeadLetterQueue() {
+    void unknownEnrollmentId_routedToDeadLetterQueue() {
         var unknownId = UUID.randomUUID();
         var event = new GeoScoreResult(
                 unknownId, C_HIGH, null,
@@ -110,31 +110,31 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
     @Test
     void geoScoreAsLastSignal_triggersDecisionEngine() {
-        var requestId = UUID.randomUUID();
+        var enrollmentId = UUID.randomUUID();
 
-        var captureQueueName = "test.decision.capture." + requestId;
+        var captureQueueName = "test.decision.capture." + enrollmentId;
         amqpAdmin.declareQueue(new Queue(captureQueueName, false, true, true));
         amqpAdmin.declareBinding(new Binding(captureQueueName, Binding.DestinationType.QUEUE,
                 AmqpConfig.DECISION_EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, null));
 
         txTemplate.executeWithoutResult(status -> {
             var entity = repository.saveAndFlush(
-                    TestEntityFactory.creditCard(requestId, Instant.now(), Instant.now().plusSeconds(60)));
+                    TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60)));
             // Seed FRAUD_CHECK as already-settled via the production write path
             // (ADR-015 §Write path). The incoming GeoScoreResult then completes the row.
             var seedSignals = new EnumMap<>(entity.getSignals());
             seedSignals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-            repository.updateSignals(requestId, jsonMapper.writeValueAsString(seedSignals));
+            repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(seedSignals));
         });
 
         var event = new GeoScoreResult(
-                requestId, C_LOW, null,
+                enrollmentId, C_LOW, null,
                 Map.of(100, 1), List.of(), 52.52, 13.405);
 
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var entity = repository.findById(requestId).orElseThrow();
+            var entity = repository.findById(enrollmentId).orElseThrow();
             assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
             assertThat(entity.getDecidedAt()).isNotNull();
         });
@@ -155,17 +155,17 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
     @Test
     void geoScoreWithNullRiskLevel_settlesWithoutResult() {
-        var requestId = UUID.randomUUID();
-        seedCreditCardRequest(requestId);
+        var enrollmentId = UUID.randomUUID();
+        seedCreditCardRequest(enrollmentId);
 
         var event = new GeoScoreResult(
-                requestId, null, "geocoding_failed",
+                enrollmentId, null, "geocoding_failed",
                 Map.of(), List.of(), null, null);
 
         rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var entity = repository.findById(requestId).orElseThrow();
+            var entity = repository.findById(enrollmentId).orElseThrow();
             var geoState = entity.getSignals().get(SignalConfig.GEO_SCORE);
             assertThat(geoState.processingState()).isEqualTo(SignalProcessingState.SETTLED);
             assertThat(geoState.riskLevel()).isNull();
@@ -193,8 +193,8 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
         amqpAdmin.purgeQueue(AmqpConfig.GEO_SCORE_DLQ);
     }
 
-    private void seedCreditCardRequest(UUID requestId) {
-        var entity = TestEntityFactory.creditCard(requestId, Instant.now(), Instant.now().plusSeconds(60));
+    private void seedCreditCardRequest(UUID enrollmentId) {
+        var entity = TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60));
         repository.saveAndFlush(entity);
     }
 }

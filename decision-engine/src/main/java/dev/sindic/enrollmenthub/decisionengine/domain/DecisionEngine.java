@@ -54,10 +54,10 @@ public final class DecisionEngine {
      *                                          when aggregation runs — indicates a bug
      *                                          in the completion predicate
      */
-    public static EnrollmentDecisionResult evaluate(Map<SignalConfig, SignalState> signals, UUID requestId) {
+    public static EnrollmentDecisionResult evaluate(Map<SignalConfig, SignalState> signals, UUID enrollmentId) {
         if (!SignalConfig.allSettled(signals)) {
             throw new IllegalStateException(
-                    "Cannot evaluate incomplete process " + requestId);
+                    "Cannot evaluate incomplete process " + enrollmentId);
         }
         return new EnrollmentDecisionResult(aggregate(signals));
     }

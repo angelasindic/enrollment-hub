@@ -32,7 +32,7 @@ public class GeoScoringService {
         this.publisher = publisher;
     }
 
-    public void scoreAddress(UUID requestId, Address shippingAddress) {
+    public void scoreAddress(UUID enrollmentId, Address shippingAddress) {
         var coordinates = geocodingService.resolve(shippingAddress).orElse(null);
 
         GeoScoreResult event;
@@ -40,11 +40,11 @@ public class GeoScoringService {
             var densityResult = geoIndexService.checkAndIndex(
                     shippingAddress.countryCode(),
                     coordinates.longitude(), coordinates.latitude(),
-                    requestId.toString());
-            event = geoIndexService.toEvent(requestId, densityResult, coordinates);
+                    enrollmentId.toString());
+            event = geoIndexService.toEvent(enrollmentId, densityResult, coordinates);
         } else {
             log.warn("Geocoding failed — emitting no-result signal state");
-            event = geoIndexService.toNotAvailableEvent(requestId);
+            event = geoIndexService.toNotAvailableEvent(enrollmentId);
         }
 
         publisher.publish(event);

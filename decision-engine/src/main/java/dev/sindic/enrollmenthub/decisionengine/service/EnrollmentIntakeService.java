@@ -60,14 +60,14 @@ public class EnrollmentIntakeService {
      * intake message to {@link #processEnrollment(Instant, EnrollmentCommand)}.
      */
     public PendingEnrollmentResponse receiveEnrollment(EnrollmentCommand command) {
-        MDC.put("requestId", command.enrollmentId().toString());
+        MDC.put("enrollmentId", command.enrollmentId().toString());
         try {
             Instant createdAt = clock.instant();
             var enrollmentEvent = new EnrollmentEvent(createdAt, EnrollmentMapper.toData(command));
             intakePublisher.publish(enrollmentEvent);
             return new PendingEnrollmentResponse(enrollmentEvent.enrollmentId());
         } finally {
-            MDC.remove("requestId");
+            MDC.remove("enrollmentId");
         }
     }
 
@@ -76,7 +76,7 @@ public class EnrollmentIntakeService {
     @Transactional(timeout = 50)
     public void processEnrollment(Instant createdAt, EnrollmentCommand command) {
 
-        MDC.put("requestId", command.enrollmentId().toString());
+        MDC.put("enrollmentId", command.enrollmentId().toString());
         try {
             // Idempotency gate (ADR-003 §Step 0): redelivered intake messages
             // (typically after a listener crash between save and ACK) hit a row
@@ -105,7 +105,7 @@ public class EnrollmentIntakeService {
                     command.enrollmentId(), command.paymentType());
             acceptedPublisher.publish(new EnrollmentEvent(createdAt, enrollmentData));
         } finally {
-            MDC.remove("requestId");
+            MDC.remove("enrollmentId");
         }
     }
 }

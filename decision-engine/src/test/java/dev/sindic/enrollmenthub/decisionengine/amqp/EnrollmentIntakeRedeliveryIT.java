@@ -107,7 +107,7 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
         // a stale snapshot across the listener's commit boundary).
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             Integer rowCount = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM enrollment_hub.enrollments WHERE request_id = ?",
+                    "SELECT COUNT(*) FROM enrollment_hub.enrollments WHERE enrollment_id = ?",
                     Integer.class, enrollmentId);
             assertThat(rowCount)
                     .as("listener must persist exactly one row for the enrollmentId, " +
@@ -120,7 +120,7 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
         // exactly one row — the PK guarantees this if the gate works.
         await().pollDelay(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(3)).untilAsserted(() -> {
             Integer rowCount = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM enrollment_hub.enrollments WHERE request_id = ?",
+                    "SELECT COUNT(*) FROM enrollment_hub.enrollments WHERE enrollment_id = ?",
                     Integer.class, enrollmentId);
             assertThat(rowCount).isEqualTo(1);
         });

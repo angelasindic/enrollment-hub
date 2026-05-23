@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * both handlers could read stale state and neither would detect completion.
  *
  * <p>Each handler follows the production flow per ADR-015 §Write path:
- * lock with {@code findByRequestIdForUpdate}, compute the new signal map via
+ * lock with {@code findByEnrollmentIdForUpdate}, compute the new signal map via
  * the immutable domain transition, persist via {@code repository.updateSignals},
  * and read the completion predicate off the just-computed state (not off the
  * stale in-memory entity).
@@ -35,9 +35,9 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
 
     @Test
     void concurrentHandlers_serializedByPessimisticLock_exactlyOneSeesCompletion() throws Exception {
-        var requestId = UUID.randomUUID();
+        var enrollmentId = UUID.randomUUID();
         txTemplate.executeWithoutResult(status -> repository.saveAndFlush(
-                TestEntityFactory.creditCard(requestId, Instant.now(), Instant.now().plusSeconds(60))));
+                TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60))));
 
         var barrier = new CyclicBarrier(2);
 
@@ -50,11 +50,11 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
             try {
                 barrier.await();
                 txTemplate.executeWithoutResult(status -> {
-                    var entity = repository.findByRequestIdForUpdate(requestId).orElseThrow();
+                    var entity = repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
                     sleep(200);
                     var updated = entity.toDomainForDecision()
                             .withSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
-                    repository.updateSignals(requestId, jsonMapper.writeValueAsString(updated.signals()));
+                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated.signals()));
                     geoSawComplete.set(updated.isComplete());
                 });
             } catch (Throwable t) {
@@ -66,11 +66,11 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
             try {
                 barrier.await();
                 txTemplate.executeWithoutResult(status -> {
-                    var entity = repository.findByRequestIdForUpdate(requestId).orElseThrow();
+                    var entity = repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
                     sleep(200);
                     var updated = entity.toDomainForDecision()
                             .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-                    repository.updateSignals(requestId, jsonMapper.writeValueAsString(updated.signals()));
+                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated.signals()));
                     fraudSawComplete.set(updated.isComplete());
                 });
             } catch (Throwable t) {
@@ -84,7 +84,7 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
         assertThat(geoError.get()).isNull();
         assertThat(fraudError.get()).isNull();
 
-        var final_ = txTemplate.execute(status -> repository.findById(requestId).orElseThrow());
+        var final_ = txTemplate.execute(status -> repository.findById(enrollmentId).orElseThrow());
         assertThat(final_.getSignals().get(SignalConfig.GEO_SCORE).processingState())
                 .isEqualTo(SignalProcessingState.SETTLED);
         assertThat(final_.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.HIGH);

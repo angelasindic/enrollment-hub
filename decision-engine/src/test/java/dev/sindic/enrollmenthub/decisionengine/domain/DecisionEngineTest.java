@@ -56,10 +56,10 @@ class DecisionEngineTest {
     /**
      * Convenience adapter that lets the existing test bodies keep their
      * {@link EnrollmentProcess}-centric phrasing even after the production API
-     * shifted to {@code (signals, requestId)}.
+     * shifted to {@code (signals, enrollmentId)}.
      */
     private static EnrollmentDecisionResult evaluate(EnrollmentProcess process) {
-        return DecisionEngine.evaluate(process.signals(), process.requestId());
+        return DecisionEngine.evaluate(process.signals(), process.enrollmentId());
     }
 
     // ── evaluate() guard ──────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ class DecisionEngineTest {
         var incomplete = EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT);
         assertThatThrownBy(() -> evaluate(incomplete))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(incomplete.requestId().toString());
+                .hasMessageContaining(incomplete.enrollmentId().toString());
     }
 
     @Test

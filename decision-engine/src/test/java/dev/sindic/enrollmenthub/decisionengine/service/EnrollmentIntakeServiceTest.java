@@ -134,7 +134,7 @@ class EnrollmentIntakeServiceTest {
             var entityCaptor = ArgumentCaptor.forClass(EnrollmentEntity.class);
             then(repository).should().save(entityCaptor.capture());
             var entity = entityCaptor.getValue();
-            assertThat(entity.getRequestId()).isEqualTo(command.enrollmentId());
+            assertThat(entity.getEnrollmentId()).isEqualTo(command.enrollmentId());
             assertThat(entity.getPaymentType()).isEqualTo(PaymentType.CREDIT_CARD);
             assertThat(entity.getSignals()).containsOnlyKeys(SignalConfig.GEO_SCORE, SignalConfig.FRAUD_CHECK);
             assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())

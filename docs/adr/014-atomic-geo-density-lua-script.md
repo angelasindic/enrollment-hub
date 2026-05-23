@@ -75,9 +75,9 @@ plus a scheduled cleanup job.**
 
 Two ZSETs per country partition:
 
-- `geo:{countryCode}` — Redis GEO sorted set. Member = `requestId`, score =
+- `geo:{countryCode}` — Redis GEO sorted set. Member = `enrollmentId`, score =
   geohash of `(lon, lat)` computed by `GEOADD`.
-- `geo:{countryCode}:ttl` — plain sorted set. Member = same `requestId`, score =
+- `geo:{countryCode}:ttl` — plain sorted set. Member = same `enrollmentId`, score =
   insertion epoch seconds. Exists solely to drive per-member expiry.
 
 Both keys share the same hash tag (`{countryCode}` can be wrapped if Redis Cluster

@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
  *   <li><b>Serialization / connection errors</b> — propagate naturally.</li>
  * </ul>
  * All three drop into the listener retry interceptor. Consumers dedup by
- * {@code requestId} (Idempotent Receiver — ADR-009 §Delivery Semantics).
+ * {@code enrollmentId} (Idempotent Receiver — ADR-009 §Delivery Semantics).
  */
 @Slf4j
 @Component
@@ -35,7 +35,7 @@ public class GeoScoreResultPublisher {
     }
 
     public void publish(GeoScoreResult event) {
-        var correlation = new CorrelationData(event.requestId().toString());
+        var correlation = new CorrelationData(event.enrollmentId().toString());
 
         rabbitTemplate.invoke(ops -> {
             ops.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.RESULT_ROUTING_KEY, event, correlation);
@@ -50,7 +50,7 @@ public class GeoScoreResultPublisher {
                             + " routingKey=" + returned.getRoutingKey()
                             + " replyText=" + returned.getReplyText());
         }
-        log.info("Published geoScoreResult requestId={} riskLevel={}",
-                event.requestId(), event.riskLevel());
+        log.info("Published geoScoreResult enrollmentId={} riskLevel={}",
+                event.enrollmentId(), event.riskLevel());
     }
 }

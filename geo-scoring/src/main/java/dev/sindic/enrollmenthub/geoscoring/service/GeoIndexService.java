@@ -64,11 +64,11 @@ public class GeoIndexService {
      * @param countryCode ISO 3166-1 alpha-2 country code (partition key)
      * @param longitude   WGS 84 longitude
      * @param latitude    WGS 84 latitude
-     * @param requestId   enrollment request identifier to index
+     * @param enrollmentId   enrollment request identifier to index
      * @return density result with neighbor counts, triggered thresholds, and truncation flag
      */
     public DensityResult checkAndIndex(String countryCode, double longitude, double latitude,
-                                       String requestId) {
+                                       String enrollmentId) {
         var geoKey = keyStrategy.keyFor(countryCode);
         var ttlKey = keyStrategy.ttlKeyFor(countryCode);
         var radii = properties.radii();
@@ -77,7 +77,7 @@ public class GeoIndexService {
         var args = new ArrayList<String>();
         args.add(String.valueOf(longitude));
         args.add(String.valueOf(latitude));
-        args.add(requestId);
+        args.add(enrollmentId);
         args.add(String.valueOf(searchLimit));
         args.add(String.valueOf(Instant.now().getEpochSecond()));
         for (var rt : radii) {
@@ -128,12 +128,12 @@ public class GeoIndexService {
     /**
      * Assembles a {@link GeoScoreResult} event from the density result.
      *
-     * @param requestId   correlation ID from the original {@code EnrollmentAccepted} event
+     * @param enrollmentId   correlation ID from the original {@code EnrollmentAccepted} event
      * @param result      density check result
      * @param coordinates geocoded coordinates, or {@code null} if geocoding failed
      * @return event ready for publishing to the decision-engine
      */
-    public GeoScoreResult toEvent(UUID requestId, DensityResult result,
+    public GeoScoreResult toEvent(UUID enrollmentId, DensityResult result,
                                     CoordinatesPayload coordinates) {
         var triggeredThresholds = properties.radii().stream()
                 .filter(rt -> result.neighborCounts().getOrDefault(rt.radius(), 0) >= rt.threshold())
@@ -141,7 +141,7 @@ public class GeoIndexService {
                 .toList();
 
         return new GeoScoreResult(
-                requestId,
+                enrollmentId,
                 result.resolveRiskLevel(),
                 null,
                 result.neighborCounts(),
@@ -157,9 +157,9 @@ public class GeoIndexService {
      * no-result condition; the decision-engine maps this to a SETTLED + no-result signal
      * state (fail-open). No entry is added to the geo-index.
      */
-    public GeoScoreResult toNotAvailableEvent(UUID requestId) {
+    public GeoScoreResult toNotAvailableEvent(UUID enrollmentId) {
         return new GeoScoreResult(
-                requestId,
+                enrollmentId,
                 null,
                 "geocoding_failed",
                 Map.of(),

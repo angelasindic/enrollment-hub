@@ -17,7 +17,7 @@ import java.util.UUID;
  * GEOSEARCH radius hit the COUNT 200 result cap.
  */
 public record GeoScoreResult(
-        UUID requestId,
+        UUID enrollmentId,
         /* Null when geocoding failed and no density measurement was possible. */
         RiskLevel riskLevel,
         /* Non-null when riskLevel is null; describes why scoring could not run. */
@@ -32,7 +32,7 @@ public record GeoScoreResult(
         Double longitude
 ) {
     public GeoScoreResult {
-        Objects.requireNonNull(requestId, "requestId must not be null");
+        Objects.requireNonNull(enrollmentId, "enrollmentId must not be null");
         neighborCounts = neighborCounts == null ? Map.of() : Map.copyOf(neighborCounts);
         triggeredThresholds = triggeredThresholds == null ? List.of() : List.copyOf(triggeredThresholds);
     }
