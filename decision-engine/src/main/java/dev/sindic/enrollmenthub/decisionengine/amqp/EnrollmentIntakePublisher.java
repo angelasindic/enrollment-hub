@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 
 /**
  *
- * Publishes {@link EnrollmentEvent} events to the {@code enrollment.intakw} direct exchange.
+ * Publishes {@link EnrollmentEvent} events to the {@code enrollment.intake} direct exchange.
  *
  * <p>Uses the channel-scoped {@code invoke + waitForConfirmsOrDie} pattern so
  * three failure modes all surface as exceptions to the caller:
@@ -35,11 +35,11 @@ public class EnrollmentIntakePublisher {
     }
 
     public void publish(EnrollmentEvent event) {
-        var routingKey = AmqpConfig.routingKeyFor(event.enrollmentData().paymentType());
         var correlation = new CorrelationData(event.enrollmentId());
 
         rabbitTemplate.invoke(ops -> {
-            ops.convertAndSend(AmqpConfig.ENROLLMENT_INTAKE_EXCHANGE, routingKey, event, correlation);
+            ops.convertAndSend(AmqpConfig.ENROLLMENT_INTAKE_EXCHANGE,
+                    AmqpConfig.ENROLLMENT_INTAKE_ROUTING_KEY, event, correlation);
             ops.waitForConfirmsOrDie(confirmTimeoutMillis);
             return Boolean.TRUE;
         });
@@ -51,8 +51,7 @@ public class EnrollmentIntakePublisher {
                             + " routingKey=" + returned.getRoutingKey()
                             + " replyText=" + returned.getReplyText());
         }
-        log.info("Published enrollment intake with enrollmentId={} routingKey={}",
-                event.enrollmentId(), routingKey);
+        log.info("Published enrollment intake enrollmentId={}", event.enrollmentId());
     }
 
 }

@@ -246,10 +246,10 @@ class DecisionEngineTest {
         }
     }
 
-    // ── ADR-018 compliance property ───────────────────────────────────────────
+    // ── ADR-016 compliance property ───────────────────────────────────────────
 
     /**
-     * ADR-018 compliance — asymmetric aggregation property.
+     * ADR-016 compliance — asymmetric aggregation property.
      *
      * <p>For every {@link RiskLevel}, with {@link SignalOutcome#OK} from the fraud check
      * and both signals {@link SignalProcessingState#SETTLED}, the result is

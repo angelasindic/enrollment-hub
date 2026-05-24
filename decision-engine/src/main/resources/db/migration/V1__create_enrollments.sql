@@ -1,7 +1,5 @@
 -- Correlation table for the scatter-gather decision-engine pipeline.
 -- Each row tracks one enrollment request through its lifecycle.
--- See ADR-016 for concurrent completion safety (SELECT FOR UPDATE + idempotency guard).
--- See ADR-018 for the Signal Classification Model implemented here.
 
 CREATE SCHEMA IF NOT EXISTS enrollment_hub;
 

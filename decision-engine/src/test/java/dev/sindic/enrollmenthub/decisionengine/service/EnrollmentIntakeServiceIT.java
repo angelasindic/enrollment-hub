@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
@@ -142,8 +143,8 @@ class EnrollmentIntakeServiceIT extends BaseIntegrationTest {
         // recovery mode and pollute the next IT.
         var productionBinding = BindingBuilder.bind(
                         QueueBuilder.durable(AmqpConfig.ENROLLMENT_INTAKE_QUEUE).build())
-                .to(new TopicExchange(AmqpConfig.ENROLLMENT_INTAKE_EXCHANGE))
-                .with("enrollment.created.*");
+                .to(new DirectExchange(AmqpConfig.ENROLLMENT_INTAKE_EXCHANGE))
+                .with(AmqpConfig.ENROLLMENT_INTAKE_ROUTING_KEY);
         rabbitAdmin.removeBinding(productionBinding);
 
         long rowsBefore = repository.count();

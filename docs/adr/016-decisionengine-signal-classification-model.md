@@ -1,4 +1,4 @@
-# ADR-018 — Decision Engine Signal Classification Model
+# ADR-016 — Decision Engine Signal Classification Model
 
 **Status:** Accepted
 **Related ADRs:** ADR-002, ADR-007, ADR-010, ADR-015

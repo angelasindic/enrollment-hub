@@ -101,11 +101,11 @@ the diagram. Dead-letter topology is consolidated in its own section further dow
 
 ### Layer 1 — Ingress: `enrollment.intake`
 
-Single publisher (`EnrollmentIntakePublisher`, invoked from
-`EnrollmentIntakeService.receiveEnrollment`). Single consumer
-(`EnrollmentIntakeListener`, decision-engine), bound on
-`enrollment.created.*` so both payment routes share the queue. No fan-out:
-this is the only entry point into the async pipeline.
+Single publisher (`EnrollmentIntakePublisher`). Single consumer
+(`EnrollmentIntakeListener`, decision-engine), bound on the fixed routing key
+`enrollment.request`. No fan-out: this is the only entry point into the async
+pipeline. Payment-type differentiation is the concern of Layer 2; the intake
+exchange only needs to route durably to one queue.
 
 ### Layer 2 — Internal Pipeline: `enrollment.events`
 
@@ -115,11 +115,10 @@ Topic exchange routes by payment type (`enrollment.created.*`) on the trigger pa
 
 ### Layer 3 — Outbound: `enrollment.decisions`
 
-> **Not yet implemented.** `EnrollmentDecisionPublisher` currently publishes to `enrollment.events` with routing key
-> `enrollment.decision.completed`. The dedicated outbound exchange is the planned target architecture.
-
-Single publisher (`EnrollmentDecisionPublisher`, decision-engine). Consumed by the account service, which owns
-`account-service.decisions.queue` — its binding and DLX configuration are out of scope for this ADR.
+Single publisher (`EnrollmentDecisionPublisher`, decision-engine), publishing to the dedicated
+`enrollment.decisions` topic exchange with routing key `enrollment.decision.completed`. Consumed by the account
+service, which owns `account-service.decisions.queue` — its binding and DLX configuration are out of scope for
+this ADR.
 
 ### Dead-letter topology
 
@@ -165,7 +164,7 @@ The pipeline entry point and the internal routing strategy are described as thre
 ### Step 0 — Intake (entry-point ordering guarantee)
 
 The REST endpoint publishes an `EnrollmentEvent` to `enrollment.intake`
-(topic exchange, single-queue topology). Publisher Confirms with
+(direct exchange) with the fixed routing key `enrollment.request`. Publisher Confirms with
 `mandatory=true` ensure the 202 response is returned only after the broker
 has accepted and bound-routed the message; an unroutable publish surfaces
 as `AmqpException` to the client.
@@ -211,12 +210,15 @@ the complete routing logic.
 Routing key: enrollment.created.credit_card
 
 geo.scoring.queue               bound to: enrollment.created.credit_card   ✓ delivered
-decision-engine.geo-score.queue    bound to: enrollment.created.credit_card   ✓ delivered
 fraud.detection.queue           bound to: enrollment.created.*             ✓ delivered
 identity.queue                  bound to: enrollment.created.invoice       ✗ not delivered
+decision-engine.geo-score.queue bound to: geo.score.completed              ✗ not delivered (result queue — Step 2)
+decision-engine.fraud-score.queue bound to: fraud.score.completed          ✗ not delivered (result queue — Step 2)
 ```
 
-Geo-scoring and fraud detection receive the message concurrently. Identity does not.
+Geo-scoring and fraud detection receive the trigger concurrently. The decision-engine's result queues
+(`decision-engine.geo-score.queue`, `decision-engine.fraud-score.queue`) are bound to result routing keys and
+do not receive the trigger event. Identity does not receive it either — wrong route.
 
 ### Step 2 — Scatter-gather within the route
 

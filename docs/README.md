@@ -39,7 +39,7 @@ then correlates the incoming results and emits a terminal `EnrollmentDecisionEve
 or time out. This pattern handles concurrent result arrival, partial signal availability, and fail-open degradation
 without requiring application-level coordination between services.
 
-**Signal classification model (ADR-018).** Each signal declares a `GateClassification` that drives how the Decision
+**Signal classification model (ADR-016).** Each signal declares a `GateClassification` that drives how the Decision
 Engine treats its result and its absence:
 
 | Classification   | Missing signal  | Authority over outcome                                   | Current assignment |
@@ -88,13 +88,13 @@ The core pipeline is implemented. Several items are planned but not yet built.
 - RabbitMQ scatter-gather topology (`enrollment.events` topic exchange, geo-score result queue with DLQ)
 - Durable intake queue (`enrollment.intake`, ADR-003 Layer 1) — `EnrollmentIntakeService` consumes and publishes `EnrollmentAccepted` post-commit
 - Durable correlation record (PostgreSQL, JSONB signal map, `SELECT FOR UPDATE` concurrency guard)
-- Decision Engine with ADR-018 signal classification model (BEST_EFFORT + SCORING_SIGNAL aggregation)
+- Decision Engine with ADR-016 signal classification model (BEST_EFFORT + SCORING_SIGNAL aggregation)
 - Complete Geo-Scoring module (libpostal normalisation, Nominatim geocoding, atomic Redis Lua density check)
 - Spring Cloud Gateway with Keycloak JWT validation (Layer 2 security)
 - `EnrollmentDecisionEvent` published with `decisionId`, `originalRequest`, and settled signal results
+- Dedicated outbound exchange (`enrollment.decisions`, ADR-003 Layer 3) — `EnrollmentDecisionPublisher` targets the dedicated exchange
 
 **Not yet implemented:**
-- Dedicated outbound exchange (`enrollment.decisions`, ADR-003 Layer 3) — decisions published to `enrollment.events`
 - Timeout poller (ADR-010) — `findPendingTimeouts()` query exists; `@Scheduled` job not wired
 - Decision-engine as OAuth2 resource server + prerequisite token validation (ADR-007) — dependency commented out
 - Fraud check result listener — `FRAUD_CHECK` signal exists in correlation record but no AMQP listener consumes `FraudCheckResult`

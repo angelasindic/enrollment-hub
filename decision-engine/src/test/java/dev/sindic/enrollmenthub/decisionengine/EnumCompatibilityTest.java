@@ -14,9 +14,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Guards against silent drift between decision-engine domain enums and their
  * contracts module counterparts.
- *
- * <p>With ADR-018, domain and contract enums are fully aligned — no sentinel
- * values exist that belong only in one layer. Both sets must be identical.
  */
 class EnumCompatibilityTest {
 

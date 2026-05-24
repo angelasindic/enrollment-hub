@@ -162,7 +162,7 @@ outside this classification model. Prerequisite checks run synchronously at the 
 pipeline is initiated; they are not participants in the aggregation. They are documented in §8.1 and ADR-007.
 
 The full classification model, the aggregation algorithm, and the rationale for retaining `REQUIRED` as a named
-classification without a current assignment are specified in ADR-018.
+classification without a current assignment are specified in ADR-016.
 
 ---
 
@@ -659,7 +659,7 @@ ADRs maintained as separate files in `docs/adr/`. Referenced by number throughou
 | ADR-013 | Geocoding Provider — Nominatim (Self-Hosted)                                 | Accepted |
 | ADR-014 | Atomic Redis Geo-Index with Per-Member TTL                                   | Accepted |
 | ADR-015 | Concurrent Scatter-Gather Completion — Transactional Safety and ACK Ordering | Accepted |
-| ADR-018 | Decision Engine Signal Classification Model                                  | Accepted |
+| ADR-016 | Decision Engine Signal Classification Model                                  | Accepted |
 
 ## 10. Risks & Open Decisions
 
