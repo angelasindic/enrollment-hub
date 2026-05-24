@@ -4,7 +4,6 @@ import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentAcceptedPublisher;
 import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentIntakePublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
-import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -50,6 +49,7 @@ class EnrollmentIntakeServiceTest {
     @Mock EnrollmentRepository repository;
     @Mock EnrollmentIntakePublisher intakePublisher;
     @Mock EnrollmentAcceptedPublisher acceptedPublisher;
+    @Mock EnrollmentCorrelationService correlationService;
 
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final tools.jackson.databind.json.JsonMapper JSON_MAPPER =
@@ -57,7 +57,7 @@ class EnrollmentIntakeServiceTest {
 
     private EnrollmentIntakeService buildService() {
         return new EnrollmentIntakeService(
-                repository, intakePublisher, acceptedPublisher, JSON_MAPPER, clock, TIMEOUT);
+                repository, correlationService, intakePublisher, acceptedPublisher, JSON_MAPPER, clock, TIMEOUT);
     }
 
     @Nested
@@ -111,37 +111,28 @@ class EnrollmentIntakeServiceTest {
     class ProcessEnrollment {
 
         @Test
-        void idempotentDiscardWhenRowAlreadyExists() {
-            // Simulate a redelivered intake message — the row already exists
-            // from the original delivery. Listener should return cleanly so
-            // AMQP can ACK; no duplicate save, no duplicate publish.
+        void redeliveredIntake_retiesDownstreamPublish() {
+            // When saveIfAbsent returns true the row already exists (redelivery).
+            // The service skips the save but still publishes — the previous delivery
+            // may have committed the row and then crashed before the publish completed.
             var command = creditCardCommand();
-            given(repository.existsById(command.enrollmentId())).willReturn(true);
+            given(correlationService.saveIfAbsent(any(), any())).willReturn(true);
 
             buildService().processEnrollment(NOW, command);
 
-            then(repository).should(never()).save(any());
-            then(acceptedPublisher).should(never()).publish(any());
+            then(correlationService).should().saveIfAbsent(NOW, command);
+            then(acceptedPublisher).should().publish(any());
             then(intakePublisher).should(never()).publish(any());
         }
 
         @Test
         void persistsCorrelationRow_andPublishesToEventsExchange_creditCard() {
             var command = creditCardCommand();
+            // saveIfAbsent returns false (new row) by default
 
             buildService().processEnrollment(NOW, command);
 
-            var entityCaptor = ArgumentCaptor.forClass(EnrollmentEntity.class);
-            then(repository).should().save(entityCaptor.capture());
-            var entity = entityCaptor.getValue();
-            assertThat(entity.getEnrollmentId()).isEqualTo(command.enrollmentId());
-            assertThat(entity.getPaymentType()).isEqualTo(PaymentType.CREDIT_CARD);
-            assertThat(entity.getSignals()).containsOnlyKeys(SignalConfig.GEO_SCORE, SignalConfig.FRAUD_CHECK);
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
-            assertThat(entity.getCreatedAt()).isEqualTo(NOW);
-            assertThat(entity.getTimeoutAt()).isEqualTo(NOW.plus(TIMEOUT));
-
+            then(correlationService).should().saveIfAbsent(NOW, command);
             then(intakePublisher).should(never()).publish(any());
             var eventCaptor = ArgumentCaptor.forClass(EnrollmentEvent.class);
             then(acceptedPublisher).should().publish(eventCaptor.capture());
@@ -154,16 +145,15 @@ class EnrollmentIntakeServiceTest {
 
             buildService().processEnrollment(NOW, command);
 
-            var entityCaptor = ArgumentCaptor.forClass(EnrollmentEntity.class);
-            then(repository).should().save(entityCaptor.capture());
-            var entity = entityCaptor.getValue();
-            assertThat(entity.getPaymentType()).isEqualTo(PaymentType.INVOICE);
-            assertThat(entity.getSignals()).containsOnlyKeys(SignalConfig.FRAUD_CHECK);
+            then(correlationService).should().saveIfAbsent(NOW, command);
+            var eventCaptor = ArgumentCaptor.forClass(EnrollmentEvent.class);
+            then(acceptedPublisher).should().publish(eventCaptor.capture());
+            assertThat(eventCaptor.getValue().enrollmentData().paymentType().name()).isEqualTo("INVOICE");
         }
 
         @Test
-        void repositoryFailurePropagates_andPublisherNotInvoked() {
-            doThrow(new RuntimeException("DB down")).when(repository).save(any());
+        void correlationServiceFailurePropagates_andPublisherNotInvoked() {
+            doThrow(new RuntimeException("DB down")).when(correlationService).saveIfAbsent(any(), any());
 
             assertThatThrownBy(() -> buildService().processEnrollment(NOW, creditCardCommand()))
                     .isInstanceOf(RuntimeException.class)
@@ -174,16 +164,16 @@ class EnrollmentIntakeServiceTest {
 
         @Test
         void publisherFailurePropagates_afterSave() {
-            // The @Transactional boundary would roll back the save; this unit
-            // test only proves the propagation. The rollback property is
-            // covered by EnrollmentIntakeServiceIT.
+            // The @Transactional boundary on saveIfAbsent rolls back the save;
+            // this unit test only proves the propagation. The rollback property
+            // is covered by EnrollmentIntakeServiceIT.
             doThrow(new RuntimeException("broker down")).when(acceptedPublisher).publish(any());
 
             assertThatThrownBy(() -> buildService().processEnrollment(NOW, creditCardCommand()))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessage("broker down");
 
-            then(repository).should().save(any());
+            then(correlationService).should().saveIfAbsent(any(), any());
         }
     }
 

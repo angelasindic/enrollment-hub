@@ -39,13 +39,11 @@ provide an extensibility mechanism to accommodate future signals as they are ide
 * **Mechanism:** A RabbitMQ topic-exchange pattern allows new check services to self-subscribe and participate in the
   scatter-gather flow without touching the core enrollment logic.
 
-#### II. Fault Isolation & Bulkheading
+#### II. Fault Isolation
 
-The pipeline relies on external dependencies— geocoding, spatial indexing, and fraud scoring services — that lack strong
-SLAs and can fail independently. Because these provide augmentative rather than essential validation signals, their
-failure must not cascade into the critical enrollment path. Each dependency is isolated behind its own process boundary.
-Therefore, a Nominatim outage or fraud-service unavailability is strictly contained and cannot stall core processing, 
-the enrollment path remains unaffected.
+The pipeline depends on external services — geocoding, spatial indexing, fraud scoring — that lack strong SLAs and fail
+independently. Because these signals are augmentative rather than essential, each is isolated behind its own process
+boundary so a Nominatim outage or fraud-service unavailability cannot stall the enrollment path.
 
 * **Mechanism:** The system maintains a **fail-open** posture, ensuring that degraded detection services do not block
   legitimate customer enrollment.
@@ -64,9 +62,9 @@ work item must survive JVM restarts, broker partitions, or database lock content
 
 #### IV. Latency Isolation & Dependency Resilience
 
-The enrollment hub is a client of downstream services (Account Service, Fraud Detection) whose latency tails exceed 1
-second and whose availability is not guaranteed. A synchronous call chain would either propagate these delays to the
-applicant or fail the enrollment entirely when a downstream service is unhealthy.
+Downstream services (Account Service, Fraud Detection) carry the P99 > 1s latency tails and best-effort availability
+noted in §1. A synchronous call chain would either propagate these delays to the applicant or drop the enrollment during
+a downstream outage.
 
 * **Mechanism:** By decoupling ingress from evaluation via durable messaging, the hub accepts enrollments regardless of
   downstream health and delivers decisions out-of-band.
@@ -577,26 +575,52 @@ and geocoding cache; raw addresses are transient in the event bus only. See §8.
 | **Data Minimization**  | **48-Hour TTL Asset (ADR-004):** Automatic expiration of PII and geo-coordinates in Redis after processing.                                          |
 | **Identity Integrity** | **Prerequisite Token Validation (§8.1):** Ensures high-materiality transactions (Invoicing) are backed by legally non-repudiable identities (eIDAS). |
 
+---
+
 ### 8.6 Entry-Point Durability and Causal Ordering
 
-A naive two-write sequence — INSERT correlation record, then publish `EnrollmentAccepted` — has two failure modes:
-publish-before-commit risks delivering the event to a fast check service before the record is visible under
-PostgreSQL's read-committed isolation; commit-before-publish risks an orphan record if the process crashes between
-the two writes.
+The original enrollment entry point performed two writes in a single request thread: it inserted a correlation record
+into PostgreSQL and then published an `EnrollmentAccepted` event to RabbitMQ. Because no transaction spans both systems,
+a crash between the two leaves an inconsistent state. The direction of the gap determines the symptom. If the publish
+precedes the database commit, the broker may deliver the event to a fast check service before the in-flight `INSERT` is
+visible under PostgreSQL's read-committed isolation; the result handler finds no correlation row and silently drops the
+result. If the publish follows the commit, a crash before the publish completes produces an orphan record — acknowledged
+to the applicant, known to the database, but never dispatched to the check services.
 
-The chosen solution inverts the write order entirely. The REST endpoint publishes a durable intake message and
-returns 202; the decision engine's own intake consumer then reads that message, inserts the correlation record,
-commits, and only then publishes `EnrollmentAccepted` in a post-commit hook. The intake message remains
-unACKed until the downstream publish succeeds — a crash causes the broker to redeliver it on restart, and a unique
-constraint on `enrollment_id` absorbs the redelivery idempotently. No outbox table or relay is required. See
-ADR-003 for the exchange topology, the publish-after-commit mechanism, and the residual orphan-record monitoring
-metric.
+Three solution shapes were evaluated. The first is a **Transactional Outbox**: the correlation record and an outbox row
+are written in the same database transaction, and a separate relay process polls the outbox and publishes to the broker.
+This eliminates both failure modes at the cost of new infrastructure — an outbox table, a relay, and operational
+monitoring of polling latency. The second **defers the publish to a post-commit synchronization hook** inside the
+listener. This closes the race where the publish beats the commit, but it leaves the orphan-record window open because
+the hook fires in process memory; a crash between commit and hook completion loses the downstream event with no broker
+redelivery. The third **inverts the write order entirely**: the REST endpoint publishes a durable intake message to a
+point-to-point queue and does nothing else. A single decision-engine consumer reads the intake message, delegates the
+correlation record insertion to an inner `@Transactional` service (the transaction commits before control returns to the
+listener), and then publishes the downstream `EnrollmentAccepted` event in non-transactional listener code. If the
+publish fails, the exception propagates to the Spring AMQP container, which NACKs the intake message and causes the
+broker to redeliver. The `enrollmentId` unique constraint guards against races, but the idempotency check is the primary
+mechanism: the second pass finds the existing correlation record via existsById, returns without inserting, and retries
+the publish.
 
-This choice does not eliminate the need for ADR-010. The two mechanisms address different failure modes. The intake
-queue closes the failure mode where messages are never published to the internal bus. The timeout poller closes a
-different failure mode: check services going silent after the trigger event was published correctly. Conflating the
-two would be a mistake — they detect different classes of stall and trigger different remediation paths.
+The third option was chosen because it provides the same end-to-end durability as the Transactional Outbox without
+additional infrastructure. The intake queue itself serves as the durable record of intent: an unacknowledged message is
+the only cursor of work in flight. Because the database transaction is committed before the publish begins, no consumer
+on the internal event bus can observe an `EnrollmentAccepted` for a correlation record that has not yet committed. The
+listener is the single sequential gatekeeper for the entire pipeline.
 
+On redelivery after a publish failure, the downstream `EnrollmentAccepted` may be published a second time. This is
+harmless because all consumers on the internal pipeline are idempotent (ADR-003). The trade-off accepted in this design
+is a small volume of duplicate internal events in exchange for avoiding an outbox table and relay process at the current
+volume envelope.
+
+This mechanism does not eliminate the need for the timeout poller documented in ADR-010. The two address different
+failure modes. The intake queue closes the failure mode where a trigger event is never published to the internal bus, by
+relying on broker redelivery to recover from crashes between the correlation insert and the downstream publish. The
+timeout poller closes a different failure mode: check services going silent after a correctly published trigger, because
+of geo-scoring downtime, Redis partition, or geocoding API exhaustion. Conflating the two would be a mistake — they
+detect different classes of stall and trigger different remediation paths.
+
+---
 ### 8.7 Messaging Semantics
 
 Idempotent consumers achieve effectively-once semantics (at-least-once delivery + idempotent receiver), eliminating the

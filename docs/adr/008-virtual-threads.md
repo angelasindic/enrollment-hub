@@ -13,7 +13,7 @@ Three approaches were evaluated:
 
 1. **Spring WebFlux (Project Reactor).** Reactive, non-blocking I/O using `Mono`/`Flux` composition. Proven at scale; prior professional experience exists with this stack.
 2. **Virtual threads only.** Finalized in Java 21 (JEP 444), supported in Spring Boot 3.2+. Blocking code that scales like reactive code, with no API changes required for existing Spring MVC, Spring AMQP, Spring Data JDBC, and Spring Data Redis usage.
-3. **Virtual threads + structured concurrency.** Adds `StructuredTaskScope` (JEP 505, fifth preview in Java 25) for coordinating parallel subtasks with automatic cancellation and timeout handling.
+3. **Virtual threads + structured concurrency.** Adds `StructuredTaskScope` (JEP 505, Java 25) for coordinating parallel subtasks with automatic cancellation and timeout handling.
 
 **Reasoning:**
 
