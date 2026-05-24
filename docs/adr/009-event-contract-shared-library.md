@@ -62,13 +62,13 @@ All events are Java records, Jackson-serializable.
 ### Shared Enums
 
 Shared enums are defined in the contracts module as the canonical
-source of truth. Values and semantics are documented in ADR-018 (classification model) and in the enum Javadoc.
+source of truth. Values and semantics are documented in ADR-016 (classification model) and in the enum Javadoc.
 
 ### Not Included (orchestrator-internal)
 
 Orchestrator-internal types — signal lifecycle state, signal configuration and classification, correlation record
 entity — are not part of the shared contracts' module. They are implementation details of the orchestrator's
-scatter-gather pipeline documented in ADR-018. The shared enums (`RiskLevel`, `SignalOutcome`, `DecisionResult`)
+scatter-gather pipeline documented in ADR-016. The shared enums (`RiskLevel`, `SignalOutcome`, `DecisionResult`)
 are mirrored in the orchestrator domain and kept in alignment with the contracts' module.
 
 ---

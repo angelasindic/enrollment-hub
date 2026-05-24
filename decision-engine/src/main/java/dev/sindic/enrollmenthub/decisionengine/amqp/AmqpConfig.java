@@ -52,6 +52,7 @@ public class AmqpConfig {
 
 
     public static final String ENROLLMENT_INTAKE_EXCHANGE         = "enrollment.intake";
+    public static final String ENROLLMENT_INTAKE_ROUTING_KEY     = "enrollment.request";
     public static final String ENROLLMENT_INTAKE_QUEUE            = "enrollment.intake.queue";
     static final String ENROLLMENT_INTAKE_DLX         = "enrollment.intake.dlx";
     static final String ENROLLMENT_INTAKE_DLQ         = "enrollment.intake.queue.dlq";
@@ -90,8 +91,8 @@ public class AmqpConfig {
     }
 
     @Bean
-    TopicExchange intakeExchange() {
-        return ExchangeBuilder.topicExchange(ENROLLMENT_INTAKE_EXCHANGE).durable(true).build();
+    DirectExchange intakeExchange() {
+        return ExchangeBuilder.directExchange(ENROLLMENT_INTAKE_EXCHANGE).durable(true).build();
     }
 
     @Bean
@@ -118,15 +119,13 @@ public class AmqpConfig {
     }
 
     /**
-     * Routes every intake publish to the single intake queue. {@code EnrollmentIntakePublisher}
-     * uses the same per-payment-type routing keys ({@link #ROUTING_KEY_CREDIT_CARD},
-     * {@link #ROUTING_KEY_INVOICE}) on the intake exchange that the events exchange uses,
-     * but the intake topology has just one queue — no fan-out — so the binding pattern
-     * catches both keys via {@code enrollment.created.*}.
+     * Point-to-point binding: every intake publish lands on the single intake queue.
+     * Payment-type differentiation is the concern of Layer 2 ({@link #EXCHANGE});
+     * the intake exchange only needs to route durably to one queue.
      */
     @Bean
-    Binding intakeBinding(Queue intakeQueue, TopicExchange intakeExchange) {
-        return BindingBuilder.bind(intakeQueue).to(intakeExchange).with("enrollment.created.*");
+    Binding intakeBinding(Queue intakeQueue, DirectExchange intakeExchange) {
+        return BindingBuilder.bind(intakeQueue).to(intakeExchange).with(ENROLLMENT_INTAKE_ROUTING_KEY);
     }
 
     /**

@@ -4,7 +4,7 @@
 > `enrollment.decisions` exchange, the JWT prerequisite gate, and the scheduled timeout
 > poller are **not yet implemented in MVP 1** — see ADR-003 §Layer 3, ADR-010, and
 > ADR-007 / ADR-011. The Correlation Record schema, Domain Model, and Decision Engine
-> sections describe what is implemented today (ADR-018).
+> sections describe what is implemented today (ADR-016).
 
 ### REST entry point
 
@@ -72,7 +72,7 @@ Queue bindings on `enrollment.events`:
 There is no Identity queue. The eIDAS Connector issues a signed JWT as a prerequisite
 gate validated synchronously by the REST endpoint (MVP 2 — see ADR-007 / ADR-011); it
 does not subscribe to RabbitMQ events. Identity is not represented as a signal in the
-correlation record's signal map — prerequisites are outside the ADR-018 signal
+correlation record's signal map — prerequisites are outside the ADR-016 signal
 classification model.
 
 Internal Fraud Detection is active in MVP 1 as a stub: it subscribes to
@@ -113,7 +113,7 @@ the internal correlation primary key.
 
 Absent fields by design:
 - **No per-signal status / result columns.** All signal state lives in the
-  `signals` JSONB map keyed by `SignalConfig` (ADR-018). Adding a new signal does
+  `signals` JSONB map keyed by `SignalConfig` (ADR-016). Adding a new signal does
   not require a schema migration.
 - **No `payment_token_status` / `identity_check_status`.** Prerequisite gates are
   resolved synchronously at the REST entry point (MVP 2) and never enter the
@@ -121,7 +121,7 @@ Absent fields by design:
 - **No `overall_status`.** Completeness is derived from the `signals` map via
   `SignalConfig.allSettled(signals)`; "decided" is implied by
   `decision_result IS NOT NULL`.
-- **No `decision_reason`.** The ADR-018 model captures decision drivers as the
+- **No `decision_reason`.** The ADR-016 model captures decision drivers as the
   settled `signals` map on the decision event; no separate reason enum is kept.
 
 ### Signal-map persistence pattern
@@ -202,7 +202,7 @@ sentinel or renames the hint property, this test catches it.
 
 ### Correlation Record Domain Model
 
-The correlation record is modelled per ADR-018's Signal Classification Model. The
+The correlation record is modelled per ADR-016's Signal Classification Model. The
 domain is an immutable record (`EnrollmentProcess`); the JPA entity
 (`EnrollmentEntity`) holds the persisted state and exposes a read-only view of the
 domain. State transitions on the domain return new instances; the entity's in-place
@@ -210,17 +210,17 @@ updates are localised to the persistence layer.
 
 **Domain types** (`decision-engine/domain`):
 
-| Type                       | Role                                                                                              |
-|----------------------------|---------------------------------------------------------------------------------------------------|
-| `SignalProcessingState`    | Lifecycle: `PENDING`, `SETTLED`, `FAILED` (timeout or crash)                                      |
-| `SignalOutcome`            | Check-style result: `OK`, `FAILED`, `NO_RESULT` (used by `BEST_EFFORT` / `REQUIRED` signals)      |
-| `RiskLevel`                | Score-style result: `LOW`, `MEDIUM`, `HIGH`, `EXTREME` (used by `SCORING_SIGNAL` signals)         |
-| `GateClassification`       | Aggregation metadata: `REQUIRED`, `BEST_EFFORT`, `SCORING_SIGNAL` (ADR-018)                       |
-| `SignalConfig`             | Enum of signals — declares applicable routes + classification (`GEO_SCORE`, `FRAUD_CHECK`)        |
-| `SignalState`              | Flat record: `(processingState, outcome, riskLevel, reason)` — serialises trivially to JSONB      |
+| Type                       | Role                                                                                                 |
+|----------------------------|------------------------------------------------------------------------------------------------------|
+| `SignalProcessingState`    | Lifecycle: `PENDING`, `SETTLED`, `FAILED` (timeout or crash)                                         |
+| `SignalOutcome`            | Check-style result: `OK`, `FAILED`, `NO_RESULT` (used by `BEST_EFFORT` / `REQUIRED` signals)         |
+| `RiskLevel`                | Score-style result: `LOW`, `MEDIUM`, `HIGH`, `EXTREME` (used by `SCORING_SIGNAL` signals)            |
+| `GateClassification`       | Aggregation metadata: `REQUIRED`, `BEST_EFFORT`, `SCORING_SIGNAL` (ADR-016)                          |
+| `SignalConfig`             | Enum of signals — declares applicable routes + classification (`GEO_SCORE`, `FRAUD_CHECK`)           |
+| `SignalState`              | Flat record: `(processingState, outcome, riskLevel, reason)` — serialises trivially to JSONB         |
 | `EnrollmentProcess`        | Immutable aggregate: `(enrollmentId, command, Map<SignalConfig, SignalState>, createdAt, timeoutAt)` |
-| `DecisionResult`           | Domain decision: `APPROVED`, `REJECTED`, `CONDITIONAL_APPROVED`                                   |
-| `EnrollmentDecisionResult` | Wrapper carrying the `DecisionResult` returned from the engine                                    |
+| `DecisionResult`           | Domain decision: `APPROVED`, `REJECTED`, `CONDITIONAL_APPROVED`                                      |
+| `EnrollmentDecisionResult` | Wrapper carrying the `DecisionResult` returned from the engine                                       |
 
 **Signal initialization by route** — built by `SignalConfig.initializeFor(PaymentType)`.
 Only applicable signals are present; absence from the map means *not applicable* on
@@ -292,7 +292,7 @@ predicate.
 
 - **Two flat result fields per signal.** `SignalState` carries both `outcome` and
   `riskLevel`; exactly one is populated per classification (check-style fills
-  `outcome`, score-style fills `riskLevel`). Trade-off documented in ADR-018:
+  `outcome`, score-style fills `riskLevel`). Trade-off documented in ADR-016:
   preferred over a sealed type hierarchy for trivial JSONB serialisation.
 - **Absence over sentinel.** Inapplicable signals are missing from the map; there
   is no `NOT_APPLICABLE` enum value. `NO_RESULT` outcomes and null `riskLevel`
@@ -345,7 +345,7 @@ Resolution after the loop, in priority order:
 SETTLED no-result (e.g. geocoding failure, `NO_RESULT` outcome, null `riskLevel`)
 contribute nothing to either accumulator. No explicit fail-open branch is needed.
 
-**Asymmetric guarantee** (ADR-018): `SCORING_SIGNAL` signals cannot drive
+**Asymmetric guarantee** (ADR-016): `SCORING_SIGNAL` signals cannot drive
 `REJECTED`. Enforced by control flow — the scoring branch can only set
 `reviewRequired`; the `rejected` accumulator is physically unreachable from that
 branch. A future change proposing a scoring signal drive rejection would require a

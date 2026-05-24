@@ -56,7 +56,7 @@ rejecting legitimate accounts during infrastructure degradation. Appropriate for
 **Timeout detection:** Option A — DB polling with `SELECT FOR UPDATE` row-level locking.
 
 **Business policy:** Signal-classification-specific — the policy is determined by the
-signal's `GateClassification` (ADR-018), not applied uniformly:
+signal's `GateClassification` (ADR-016), not applied uniformly:
 
 | Signal                    | Classification                      | Timeout policy | Outcome              |
 |---------------------------|-------------------------------------|----------------|----------------------|

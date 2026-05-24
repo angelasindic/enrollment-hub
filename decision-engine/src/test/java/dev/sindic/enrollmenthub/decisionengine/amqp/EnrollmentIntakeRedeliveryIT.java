@@ -11,6 +11,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
@@ -56,7 +57,7 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
     @Autowired RabbitAdmin rabbitAdmin;
     @Autowired JdbcTemplate jdbc;
     @Autowired @Qualifier("enrollmentExchange") TopicExchange enrollmentExchange;
-    @Autowired @Qualifier("intakeExchange") TopicExchange intakeExchange;
+    @Autowired @Qualifier("intakeExchange") DirectExchange intakeExchange;
 
     @BeforeEach
     void declareCaptureQueue() {
@@ -68,7 +69,7 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
         // actually receives the messages this test publishes.
         rabbitAdmin.declareBinding(BindingBuilder.bind(
                         QueueBuilder.durable(AmqpConfig.ENROLLMENT_INTAKE_QUEUE).build())
-                .to(intakeExchange).with("enrollment.created.*"));
+                .to(intakeExchange).with(AmqpConfig.ENROLLMENT_INTAKE_ROUTING_KEY));
 
         var queue = QueueBuilder.nonDurable(EVENTS_CAPTURE_QUEUE).build();
         rabbitAdmin.declareQueue(queue);
@@ -94,11 +95,11 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
         // crash-between-save-and-ACK.
         rabbitTemplate.convertAndSend(
                 AmqpConfig.ENROLLMENT_INTAKE_EXCHANGE,
-                AmqpConfig.ROUTING_KEY_CREDIT_CARD,
+                AmqpConfig.ENROLLMENT_INTAKE_ROUTING_KEY,
                 event);
         rabbitTemplate.convertAndSend(
                 AmqpConfig.ENROLLMENT_INTAKE_EXCHANGE,
-                AmqpConfig.ROUTING_KEY_CREDIT_CARD,
+                AmqpConfig.ENROLLMENT_INTAKE_ROUTING_KEY,
                 event);
 
         // Wait for the row to appear AND remain a single row through the
