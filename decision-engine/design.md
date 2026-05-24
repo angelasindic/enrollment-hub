@@ -52,6 +52,25 @@ message before the 202 response is returned. If the publish ultimately fails aft
 retries, the request surfaces as a 5xx to the client; dead-lettering is described in
 ADR-003 §Dead-letter topology.
 
+### Intake Listener and Causal Ordering
+
+The intake listener is the single sequential gatekeeper for the entire pipeline. It
+performs two operations in strict order, across separate failure domains:
+
+1. **Persist the correlation record** via `EnrollmentCorrelationService.saveIfAbsent()`,
+   an inner `@Transactional` service. The transaction commits and releases before control
+   returns to the listener.
+2. **Publish the downstream trigger event** to `enrollment.events`. This occurs only
+   after the database commit is durable.
+
+This commit-before-publish sequence provides the causal ordering guarantee described
+in ADR-003. If the publish fails, the exception propagates to the Spring AMQP listener
+container, which negative-acknowledges the intake message and triggers broker
+redelivery. On redelivery, `saveIfAbsent()` finds the existing correlation record
+(idempotency guard via `enrollmentId` unique constraint) and returns immediately;
+the listener retries the publish. 
+The `EnrollmentCorrelationService` handles the transactional boundary and idempotent delivery.
+
 ### RabbitMQ routing key strategy
 
 `EnrollmentIntakeListener` publishes `EnrollmentAccepted` to the `enrollment.events` topic exchange. The routing key
@@ -89,7 +108,7 @@ enrollment_hub.enrollments
   - enrollment_id           UUID         PRIMARY KEY   ← idempotency key for intake redelivery; never published downstream
   - payment_type         VARCHAR(20)  NOT NULL       ← CREDIT_CARD | INVOICE — routing discriminator
   - original_request     JSONB        NOT NULL       ← full enrollment data captured at intake; forwarded in EnrollmentDecisionEvent
-  - signals              JSONB        NOT NULL       ← Map<SignalConfig, SignalState>; only applicable signals are present
+  - signals              JSONB        NOT NULL       ← Map<<SignalConfig, SignalState>; only applicable signals are present
   - decision_result      VARCHAR(30)  NULL          ← APPROVED | REJECTED | CONDITIONAL_APPROVED — set when all signals settle
   - decision_id          UUID         NULL          ← fresh UUID generated at decision time; published instead of enrollment_id
   - created_at           TIMESTAMPTZ  NOT NULL
@@ -218,7 +237,7 @@ updates are localised to the persistence layer.
 | `GateClassification`       | Aggregation metadata: `REQUIRED`, `BEST_EFFORT`, `SCORING_SIGNAL` (ADR-016)                          |
 | `SignalConfig`             | Enum of signals — declares applicable routes + classification (`GEO_SCORE`, `FRAUD_CHECK`)           |
 | `SignalState`              | Flat record: `(processingState, outcome, riskLevel, reason)` — serialises trivially to JSONB         |
-| `EnrollmentProcess`        | Immutable aggregate: `(enrollmentId, command, Map<SignalConfig, SignalState>, createdAt, timeoutAt)` |
+| `EnrollmentProcess`        | Immutable aggregate: `(enrollmentId, command, Map<<SignalConfig, SignalState>, createdAt, timeoutAt)` |
 | `DecisionResult`           | Domain decision: `APPROVED`, `REJECTED`, `CONDITIONAL_APPROVED`                                      |
 | `EnrollmentDecisionResult` | Wrapper carrying the `DecisionResult` returned from the engine                                       |
 
@@ -235,15 +254,6 @@ Prerequisite gates (Credit_Card_JWT, eIDAS_JWT) are resolved synchronously at th
 REST entry point (MVP 2 — ADR-007 / ADR-011). They produce no entry in the signal
 map.
 
-**Fact update methods on `EnrollmentProcess`:**
-
-| Method                                            | Trigger                                     | Effect                                                                            |
-|---------------------------------------------------|---------------------------------------------|-----------------------------------------------------------------------------------|
-| `start(enrollmentId, command, createdAt, timeoutAt)` | Intake listener after commit                | Builds process with `SignalConfig.initializeFor(paymentType)`                     |
-| `withSignalResult(SignalConfig, SignalState)`     | Signal result listener                      | Returns new process with the named signal's state replaced                        |
-| `withTimeout()`                                   | Scheduled timeout poller (ADR-010, planned) | Transitions all PENDING signals to FAILED (fail-open); leaves SETTLED unchanged   |
-| `isComplete()`                                    | After any transition                        | True when every applicable signal has settled (status ≠ PENDING)                  |
-
 **Scatter-gather flow (CREDIT_CARD route):**
 
 ```mermaid
@@ -254,9 +264,9 @@ flowchart TD
     intakePub --> http202["202 Accepted"]
 
     intakePub -.->|broker delivery| intakeListen["EnrollmentIntakeListener<br/>consumes EnrollmentRequest"]
-    intakeListen --> startTx["@Transactional recordIntake()<br/>EnrollmentEntity.create()<br/>signals: {GEO_SCORE: PENDING,<br/>FRAUD_CHECK: PENDING}"]
+    intakeListen --> startTx["@Transactional saveIfAbsent()<<br/>EnrollmentEntity.create()<<br/>signals: {GEO_SCORE: PENDING,<br/>FRAUD_CHECK: PENDING}"]
     startTx --> commit["COMMIT"]
-    commit --> postCommit["Post-commit publish<br/>EnrollmentAccepted<br/>routing key: enrollment.created.credit_card"]
+    commit --> postCommit["Publish EnrollmentAccepted<br/>routing key: enrollment.created.credit_card"]
 
     postCommit --> geo["Geo-Scoring<br/>consumes event"]
     postCommit --> fraud["Fraud Detection<br/>consumes event"]
@@ -270,10 +280,10 @@ flowchart TD
     complete -- "false" --> wait["Wait for remaining signal"]
     wait --> complete
 
-    complete -- "true" --> decision["DecisionEngine.evaluate()<br/>→ DecisionResult"]
+    complete -- "true" --> decision["DecisionEngine.evaluate()<<br/>→ DecisionResult"]
     decision --> event["Publish EnrollmentDecisionEvent<br/>to enrollment.decisions"]
 
-    timeout["Scheduled poller<br/>deadline exceeded"] -.-> wTimeout["withTimeout()<br/>PENDING → FAILED (fail-open)"]
+    timeout["Scheduled poller<br/>deadline exceeded"] -.-> wTimeout["withTimeout()<<br/>PENDING → FAILED (fail-open)"]
     wTimeout -.-> complete
 
     style timeout stroke-dasharray: 5 5
@@ -287,6 +297,15 @@ flowchart TD
 in the map has settled (`processingState ≠ PENDING`). Signals not present in the
 map are by definition not applicable to the route and contribute nothing to the
 predicate.
+
+**Fact update methods on `EnrollmentProcess`:**
+
+| Method                                            | Trigger                                     | Effect                                                                            |
+|---------------------------------------------------|---------------------------------------------|-----------------------------------------------------------------------------------|
+| `start(enrollmentId, command, createdAt, timeoutAt)` | Intake listener after commit                | Builds process with `SignalConfig.initializeFor(paymentType)`                     |
+| `withSignalResult(SignalConfig, SignalState)`     | Signal result listener                      | Returns new process with the named signal's state replaced                        |
+| `withTimeout()`                                   | Scheduled timeout poller (ADR-010, planned) | Transitions all PENDING signals to FAILED (fail-open); leaves SETTLED unchanged   |
+| `isComplete()`                                    | After any transition                        | True when every applicable signal has settled (status ≠ PENDING)                  |
 
 **Design decisions:**
 
@@ -308,8 +327,8 @@ predicate.
 - **Extensibility.** Adding a new signal requires (1) declaring a new `SignalConfig`
   value with its applicable routes and `GateClassification`, (2) the consumer
   service publishing a result event the decision-engine listener consumes, and (3)
-  no change to the aggregation logic — dispatch is on `GateClassification`, not on
-  signal identity. No schema migration is required for the JSONB `signals` column.
+  no change to the aggregation logic — dispatch is on `GateClassification`, not
+  on signal identity. No schema migration is required for the JSONB `signals` column.
 
 **Event contracts** are defined as Java records in the shared `enrollment-hub:contracts`
 module (ADR-009). The canonical field definitions for `EnrollmentAccepted`,

@@ -33,6 +33,7 @@ import java.time.Instant;
 public class EnrollmentIntakeService {
 
     private final EnrollmentRepository repository;
+    private final EnrollmentCorrelationService correlationService;
     private final EnrollmentIntakePublisher intakePublisher;
     private final EnrollmentAcceptedPublisher acceptedPublisher;
     private final JsonMapper jsonMapper;
@@ -40,12 +41,14 @@ public class EnrollmentIntakeService {
     private final Duration timeout;
 
     public EnrollmentIntakeService(EnrollmentRepository repository,
+                                   EnrollmentCorrelationService correlationService,
                                    EnrollmentIntakePublisher intakePublisher,
                                    EnrollmentAcceptedPublisher acceptedPublisher,
                                    JsonMapper jsonMapper,
                                    Clock clock,
                                    @Value("${decision-engine.scatter-gather.timeout}") Duration timeout) {
         this.repository = repository;
+        this.correlationService = correlationService;
         this.intakePublisher = intakePublisher;
         this.acceptedPublisher = acceptedPublisher;
         this.jsonMapper = jsonMapper;
@@ -55,9 +58,8 @@ public class EnrollmentIntakeService {
 
     /**
      * REST entry point — publishes to {@code enrollment.intake} for broker-backed
-     * durability (ADR-003 §Layer 1). No DB writes here; the correlation record is
-     * created by {@code EnrollmentIntakeListener} after the broker delivers the
-     * intake message to {@link #processEnrollment(Instant, EnrollmentCommand)}.
+     * durability. No DB writes here; the correlation record is created by {@code EnrollmentIntakeListener}
+     * after the broker delivers the intake message to {@link #processEnrollment(Instant, EnrollmentCommand)}.
      */
     public PendingEnrollmentResponse receiveEnrollment(EnrollmentCommand command) {
         MDC.put("enrollmentId", command.enrollmentId().toString());
@@ -71,39 +73,35 @@ public class EnrollmentIntakeService {
         }
     }
 
-    //TODO hardcoded timeout
-    //@Transactional(timeout = 5)
-    @Transactional(timeout = 50)
+    /**
+     * Listener entry point. Non-transactional.
+     *   <p>The transaction boundary is deliberately narrower than the listener method:
+     *  {@link EnrollmentCorrelationService#saveIfAbsent} runs in its own transaction
+     *  and commits before this method proceeds to the downstream publish.
+     *
+     * <p>Step 1 — Transactional DB write: {@code saveIfAbsent} commits the
+     * correlation record before returning. If the record already exists (broker
+     * redelivery), it returns {@code true} and we proceed to retry the publish.
+     *
+     * <p>Step 2 — Downstream publish: happens after the DB transaction has
+     * committed. A failure here throws, the Spring AMQP container NACKs the intake
+     * message, and the broker redelivers. The next pass hits the idempotency guard
+     * in step 1 and retries step 2.
+     */
     public void processEnrollment(Instant createdAt, EnrollmentCommand command) {
 
         MDC.put("enrollmentId", command.enrollmentId().toString());
         try {
-            // Idempotency gate (ADR-003 §Step 0): redelivered intake messages
-            // (typically after a listener crash between save and ACK) hit a row
-            // that already exists. Return without re-saving or re-publishing —
-            // the original delivery's downstream consumers will dedup the event
-            // they already received, so we don't re-emit it either. The PK
-            // constraint on enrollmentId is the safety net behind this check.
-            if (repository.existsById(command.enrollmentId())) {
-                log.info("Intake already processed enrollmentId={}; ACKing redelivered message",
+            boolean alreadyProcessed = correlationService.saveIfAbsent(createdAt, command);
+            if (alreadyProcessed) {
+                log.info("Intake redelivered for enrollmentId={}; downstream publish will be retried",
                         command.enrollmentId());
-                return;
             }
 
-            Instant timeoutAt = createdAt.plus(timeout);
+            // Publish after confirmed DB commit. Exception here → NACK → redelivery.
             EnrollmentData enrollmentData = EnrollmentMapper.toData(command);
-            String originalRequest = jsonMapper.writeValueAsString(enrollmentData);
-            EnrollmentEntity entity = EnrollmentEntity.create(
-                    command.enrollmentId(),
-                    command.paymentType(),
-                    originalRequest,
-                    createdAt,
-                    timeoutAt
-            );
-            repository.save(entity);
-            log.info("Persisted correlation record '{}' paymentType={}",
-                    command.enrollmentId(), command.paymentType());
             acceptedPublisher.publish(new EnrollmentEvent(createdAt, enrollmentData));
+
         } finally {
             MDC.remove("enrollmentId");
         }
