@@ -221,7 +221,7 @@ sentinel or renames the hint property, this test catches it.
 
 ### Correlation Record Domain Model
 
-The correlation record is modelled per ADR-016's Signal Classification Model. The
+The correlation record is modeled per ADR-016's Signal Classification Model. The
 domain is an immutable record (`EnrollmentProcess`); the JPA entity
 (`EnrollmentEntity`) holds the persisted state and exposes a read-only view of the
 domain. State transitions on the domain return new instances; the entity's in-place
