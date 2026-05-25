@@ -131,6 +131,10 @@ class AmqpConfig {
         var factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(messageConverter);
+        // The request queue is owned/declared by the decision-engine (ADR-003 §Channel ownership),
+        // not by geo-scoring. Tolerate it not existing yet at startup — the container retries
+        // declaration instead of failing fatally if geo-scoring starts before the decision-engine.
+        factory.setMissingQueuesFatal(false);
         factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-geo-"));
         factory.setConcurrentConsumers(CONCURRENT_CONSUMERS);
         factory.setMaxConcurrentConsumers(MAX_CONCURRENT_CONSUMERS);

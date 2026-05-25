@@ -104,6 +104,10 @@ class AmqpConfig {
         var factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(messageConverter);
+        // The request queue is owned/declared by the decision-engine (ADR-003 §Channel ownership),
+        // not by fraud-detection. Tolerate it not existing yet at startup — the container retries
+        // declaration instead of failing fatally if fraud-detection starts before the decision-engine.
+        factory.setMissingQueuesFatal(false);
         factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-fraud-"));
         factory.setObservationEnabled(true);
         factory.setAdviceChain(RetryInterceptorBuilder.stateless()

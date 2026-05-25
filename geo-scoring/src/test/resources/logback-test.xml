@@ -11,4 +11,7 @@
 
     <!-- Suppress expected connection-lost warnings during Testcontainers teardown -->
     <logger name="org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer" level="ERROR"/>
+    <!-- Non-AMQP ITs load the full context but don't declare the decision-engine-owned request
+         queue, so the listener logs expected "failed to declare queue" retries (missingQueuesFatal=false). -->
+    <logger name="org.springframework.amqp.rabbit.listener.BlockingQueueConsumer" level="ERROR"/>
 </configuration>
