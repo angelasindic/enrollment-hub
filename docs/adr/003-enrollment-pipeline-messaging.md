@@ -184,15 +184,14 @@ dead-letter queue, `<service>.dlx` for its DLX. All entries below are durable.
 |-----------------------------------------------|---------------------------------------------|---------------------------------------------------|------------------------------------------------|
 | `enrollment.intake.queue`                     | `enrollment.intake.dlx`                     | `enrollment.intake.queue.dlq`                     | decision-engine                                |
 | `geo.scoring.requests.queue`                  | `geo.scoring.requests.dlx`                  | `geo.scoring.requests.queue.dlq`                  | decision-engine (consumed by geo-scoring)      |
-| `fraud.detection.requests.queue` †            | `fraud.detection.requests.dlx` †            | `fraud.detection.requests.queue.dlq` †            | decision-engine (consumed by fraud-detection †)|
+| `fraud.detection.requests.queue`              | `fraud.detection.requests.dlx`              | `fraud.detection.requests.queue.dlq`              | decision-engine (consumed by fraud-detection)  |
 | `decision-engine.geo-score.results.queue`     | `decision-engine.geo-score.results.dlx`     | `decision-engine.geo-score.results.queue.dlq`     | decision-engine                                |
-| `decision-engine.fraud-check.results.queue` † | `decision-engine.fraud-check.results.dlx` † | `decision-engine.fraud-check.results.queue.dlq` † | decision-engine †                              |
+| `decision-engine.fraud-check.results.queue`   | `decision-engine.fraud-check.results.dlx`   | `decision-engine.fraud-check.results.queue.dlq`   | decision-engine                                |
 | `account-service.decisions.queue`             | (owned by account-service)                  | (owned by account-service)                        | account-service *(out of scope)*               |
 
-† **Not yet implemented.** Internal Fraud Detection has no worker yet. The decision engine declares
-`fraud.detection.requests.queue` so it can dispatch `fraud.check` commands that simply accumulate until a consumer
-attaches (the `FRAUD_CHECK` signal fail-opens via the timeout poller in the interim — ADR-010), plus the fraud-result
-listener queue. The fraud worker is built as the final step of the topology rollout and attaches as a pure listener.
+Internal Fraud Detection runs as a stub (approves unconditionally with `SignalOutcome.OK`); its real signal set is an
+open decision (architecture.md §10.1). The wiring is complete: the fraud worker consumes `fraud.detection.requests.queue`
+and replies on `enrollment.check.result`, which the decision-engine's fraud-result listener records.
 
 ---
 

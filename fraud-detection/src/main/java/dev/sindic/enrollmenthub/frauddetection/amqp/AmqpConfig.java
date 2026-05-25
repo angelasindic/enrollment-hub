@@ -1,4 +1,4 @@
-package dev.sindic.enrollmenthub.geoscoring.amqp;
+package dev.sindic.enrollmenthub.frauddetection.amqp;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -21,30 +21,20 @@ import tools.jackson.databind.json.JsonMapper;
 @EnableConfigurationProperties(AmqpProperties.class)
 class AmqpConfig {
 
-    static final String PUBLISH_FAILURE_METRIC = "geo_scoring_publish_failures_total";
+    static final String PUBLISH_FAILURE_METRIC = "fraud_detection_publish_failures_total";
 
     // Request queue — owned and declared by the decision-engine (ADR-003 §Channel ownership).
-    // Geo-scoring attaches a listener by name and does not redeclare it.
-    static final String REQUEST_QUEUE = "geo.scoring.requests.queue";
+    // Fraud detection attaches a listener by name and does not redeclare it.
+    static final String REQUEST_QUEUE = "fraud.detection.requests.queue";
 
-    // Result channel — geo-scoring publishes GeoScoreResult here for the decision-engine.
+    // Result channel — fraud detection publishes FraudCheckResult here for the decision-engine.
     static final String RESULT_EXCHANGE    = "enrollment.check.result";
-    static final String RESULT_ROUTING_KEY = "geo.score";
+    static final String RESULT_ROUTING_KEY = "fraud.check";
 
     private static final int    MAX_RETRIES      = 3;
     private static final long   INITIAL_INTERVAL = 1_000L;
     private static final double MULTIPLIER       = 2.0;
     private static final long   MAX_INTERVAL     = 10_000L;
-
-    /**
-     * Steady-state and burst concurrency for the listener container (M2 in the geo-scoring
-     * review). Threads are virtual ({@link VirtualThreadTaskExecutor}), so the cost of holding
-     * idle consumers is dominated by the Rabbit channel each one owns, not by OS threads.
-     * 8/24 keeps in-flight load on self-hosted Nominatim and Redis bounded while still
-     * absorbing realistic enrollment bursts.
-     */
-    private static final int CONCURRENT_CONSUMERS     = 8;
-    private static final int MAX_CONCURRENT_CONSUMERS = 24;
 
     /** Result exchange (shared; also declared by the decision-engine). Declared idempotently. */
     @Bean
@@ -62,22 +52,10 @@ class AmqpConfig {
     }
 
     /**
-     * RabbitTemplate with publisher confirms, mandatory publishing, and observability
-     * hooks wired in. See ADR-009 §Delivery Semantics for the full pattern stack:
-     *
-     * <ul>
-     *   <li><b>Confirms</b> (Guaranteed Delivery, EIP) — combined with
-     *       {@code waitForConfirmsOrDie} on the publish path, a lost/nacked broker
-     *       confirm surfaces as an exception so the listener retry path re-publishes.</li>
-     *   <li><b>Mandatory + ReturnsCallback</b> — an unroutable message (wrong exchange,
-     *       missing binding, typo'd routing key) is returned by the broker rather than
-     *       silently dropped. The return is recorded on the per-publish
-     *       {@code CorrelationData}; the publisher checks for it after
-     *       {@code waitForConfirmsOrDie} and throws to trigger retry.</li>
-     *   <li><b>Metrics</b> — nacks and returns increment
-     *       {@value #PUBLISH_FAILURE_METRIC} (tagged by {@code reason}) so ops can
-     *       alert on publish failures independently of listener-level retries.</li>
-     * </ul>
+     * RabbitTemplate with publisher confirms, mandatory publishing, and observability hooks
+     * (ADR-009 §Delivery Semantics): a nacked confirm or an unroutable return surfaces as an
+     * exception on the publish path so the listener retry interceptor re-invokes; nacks and returns
+     * increment {@value #PUBLISH_FAILURE_METRIC} tagged by {@code reason}.
      */
     @Bean
     RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory,
@@ -85,11 +63,11 @@ class AmqpConfig {
                                   MeterRegistry meterRegistry) {
         var nackCounter = Counter.builder(PUBLISH_FAILURE_METRIC)
                 .tag("reason", "nack")
-                .description("RabbitMQ publisher confirm nacks for geo-scoring events")
+                .description("RabbitMQ publisher confirm nacks for fraud-detection events")
                 .register(meterRegistry);
         var returnCounter = Counter.builder(PUBLISH_FAILURE_METRIC)
                 .tag("reason", "returned")
-                .description("Unroutable geo-scoring events returned by the broker")
+                .description("Unroutable fraud-detection events returned by the broker")
                 .register(meterRegistry);
 
         var template = new RabbitTemplate(connectionFactory);
@@ -104,10 +82,6 @@ class AmqpConfig {
             }
         });
 
-        // Global observability hook. The publish path still needs to inspect
-        // CorrelationData.getReturned() after waitForConfirmsOrDie to convert the
-        // return into a thrown exception, because ReturnsCallback runs on the AMQP
-        // I/O thread and cannot propagate back to the listener thread.
         template.setReturnsCallback(returned -> {
             log.error("RabbitMQ returned unroutable message exchange={} routingKey={} replyCode={} replyText={}",
                     returned.getExchange(), returned.getRoutingKey(),
@@ -119,10 +93,9 @@ class AmqpConfig {
     }
 
     /**
-     * Listener container factory with virtual thread executor (ADR-008). Spring AMQP 4.x accepts
-     * any {@code TaskExecutor} on the container factory; {@link VirtualThreadTaskExecutor} is wired
-     * here for the {@code amqp-geo-} thread-name prefix on top of the application-wide
-     * {@code spring.threads.virtual.enabled=true}.
+     * Listener container factory with a virtual-thread executor (ADR-008, {@code amqp-fraud-}
+     * thread-name prefix), exponential-backoff retry, and non-requeueing recovery to the DLQ on
+     * exhaustion.
      */
     @Bean
     SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
@@ -131,9 +104,7 @@ class AmqpConfig {
         var factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(messageConverter);
-        factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-geo-"));
-        factory.setConcurrentConsumers(CONCURRENT_CONSUMERS);
-        factory.setMaxConcurrentConsumers(MAX_CONCURRENT_CONSUMERS);
+        factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-fraud-"));
         factory.setObservationEnabled(true);
         factory.setAdviceChain(RetryInterceptorBuilder.stateless()
                 .maxRetries(MAX_RETRIES)

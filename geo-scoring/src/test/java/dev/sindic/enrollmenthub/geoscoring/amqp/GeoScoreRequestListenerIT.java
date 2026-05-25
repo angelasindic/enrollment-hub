@@ -5,7 +5,6 @@ import dev.sindic.enrollmenthub.contracts.events.GeoScoreRequest;
 import dev.sindic.enrollmenthub.contracts.events.GeoScoreResult;
 import dev.sindic.enrollmenthub.geoscoring.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.geoscoring.service.GeocodingService;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
@@ -49,7 +48,6 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
     private static final String RESULT_CAPTURE_QUEUE = "test.geo.result.capture";
 
     @Autowired RabbitTemplate rabbitTemplate;
-    @Autowired MeterRegistry meterRegistry;
 
     @MockitoSpyBean GeoScoreRequestListener listener;
     @MockitoSpyBean GeocodingService geocodingService;
@@ -123,19 +121,6 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
             assertThat(result.enrollmentId()).isEqualTo(enrollmentId);
             assertThat(result.riskLevel()).isNull();
             assertThat(result.noResultReason()).isEqualTo("geocoding_failed");
-        });
-    }
-
-    @Test
-    void dlqDepthGauge_reflectsDlqDepth() {
-        var poison = MessageBuilder.withBody("{\"garbage\": true}".getBytes())
-                .setContentType(MessageProperties.CONTENT_TYPE_JSON).build();
-        rabbitTemplate.send(REQUEST_EXCHANGE, GEO_KEY, poison);
-
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
-            var gauge = meterRegistry.find("rabbitmq.dlq.depth").tag("queue", REQUEST_DLQ).gauge();
-            assertThat(gauge).isNotNull();
-            assertThat(gauge.value()).isGreaterThan(0);
         });
     }
 

@@ -309,7 +309,7 @@ modes increment the `geo_scoring_publish_failures_total` counter (tagged `reason
 | Signal | Source | Notes |
 |---|---|---|
 | `geo_scoring_publish_failures_total{reason=nack\|returned}` | `AmqpConfig` counters | Publisher-side broker failures. Alert on non-zero. |
-| `rabbitmq.dlq.depth{queue=geo.scoring.requests.queue.dlq}` | `AmqpConfig` gauge | DLQ backlog. Steady-state should be zero. |
+| `rabbitmq.dlq.depth{queue=geo.scoring.requests.queue.dlq}` | decision-engine `RabbitDlqMetricsConfig` | DLQ backlog (the request queue + DLQ are decision-engine-owned, so it reports the depth). Steady-state should be zero. |
 | `enrollmentId` MDC key | `GeoScoreRequestListener` | Set on entry, cleared in `finally`. Carried into all SLF4J log lines emitted while handling the command. |
 | `Density check key=… neighborCounts=… triggered=… truncated=…` | `GeoIndexService.checkAndIndex` | One INFO line per evaluated address. |
 | `Geocoding cache hit key=…` / `miss — resolving via provider address=…` | `GeocodingCacheService` / `GeocodingService` | Per-lookup cache outcome. |

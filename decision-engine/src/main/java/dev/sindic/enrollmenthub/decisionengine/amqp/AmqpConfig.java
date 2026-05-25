@@ -77,6 +77,9 @@ public class AmqpConfig {
     static final String GEO_SCORE_RESULT_QUEUE    = "decision-engine.geo-score.results.queue";
     static final String FRAUD_CHECK_RESULT_QUEUE  = "decision-engine.fraud-check.results.queue";
     static final String GEO_SCORE_RESULT_DLQ      = GEO_SCORE_RESULT_QUEUE + ".dlq";
+    static final String FRAUD_CHECK_RESULT_DLQ    = FRAUD_CHECK_RESULT_QUEUE + ".dlq";
+    static final String GEO_SCORE_REQUEST_DLQ     = GEO_SCORE_REQUEST_QUEUE + ".dlq";
+    static final String FRAUD_CHECK_REQUEST_DLQ   = FRAUD_CHECK_REQUEST_QUEUE + ".dlq";
 
     private static final int    MAX_RETRIES      = 3;
     private static final long   INITIAL_INTERVAL = 1_000L;

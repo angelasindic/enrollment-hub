@@ -16,9 +16,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      contracts: ${{ steps.filter.outputs.contracts }}
-      geo-scoring: ${{ steps.filter.outputs.geo-scoring }}
-      decision-engine: ${{ steps.filter.outputs.decision-engine }}
+      list: ${{ steps.resolve.outputs.list }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -30,11 +28,30 @@ jobs:
               - 'contracts/**'
             geo-scoring:
               - 'geo-scoring/**'
+            fraud-detection:
+              - 'fraud-detection/**'
             decision-engine:
               - 'decision-engine/**'
 
+      - name: Resolve modules to build
+        id: resolve
+        run: |
+          # workflow_dispatch has no diff base, and a contracts/root-pom change affects every
+          # module — build the whole reactor in both cases.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || \
+                "${{ steps.filter.outputs.contracts }}" == "true" ]]; then
+            echo "list=contracts,geo-scoring,fraud-detection,decision-engine" >> "$GITHUB_OUTPUT"
+          else
+            MODS=""
+            [[ "${{ steps.filter.outputs.geo-scoring }}" == "true" ]] && MODS="$MODS,geo-scoring"
+            [[ "${{ steps.filter.outputs.fraud-detection }}" == "true" ]] && MODS="$MODS,fraud-detection"
+            [[ "${{ steps.filter.outputs.decision-engine }}" == "true" ]] && MODS="$MODS,decision-engine"
+            echo "list=${MODS#,}" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     needs: changes
+    if: needs.changes.outputs.list != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,21 +63,34 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: Resolve modules to build
-        id: modules
+      - name: Build & unit-test changed modules
         run: |
-          # workflow_dispatch has no diff base — build everything
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" || \
-                "${{ needs.changes.outputs.contracts }}" == "true" ]]; then
-            echo "list=contracts,geo-scoring,decision-engine" >> "$GITHUB_OUTPUT"
-          else
-            MODS=""
-            [[ "${{ needs.changes.outputs.geo-scoring }}" == "true" ]] && MODS="$MODS,geo-scoring"
-            [[ "${{ needs.changes.outputs.decision-engine }}" == "true" ]] && MODS="$MODS,decision-engine"
-            echo "list=${MODS#,}" >> "$GITHUB_OUTPUT"
-          fi
+          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am verify -DskipITs --batch-mode --no-transfer-progress
 
-      - name: Build & test changed modules
-        if: steps.modules.outputs.list != ''
+  integration-tests:
+    needs: [ changes, build ]
+    if: needs.changes.outputs.list != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # Install the changed modules and their upstream dependencies (no tests) so the failsafe
+      # goals below resolve them from the local repo and run against the compiled test classes.
+      - name: Build dependencies
         run: |
-          ./mvnw -pl "${{ steps.modules.outputs.list }}" -am verify -DskipITs --batch-mode --no-transfer-progress
+          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am install -DskipTests --batch-mode --no-transfer-progress
+
+      # Run integration tests for the changed modules ONLY (no -am), via the failsafe goals
+      # directly so surefire unit tests are not re-run (they ran in the build job). This also keeps
+      # an upstream module's ITs (e.g. geo-scoring's Nominatim container) from re-running when only
+      # a downstream module changed. Testcontainers uses the Docker daemon preinstalled on the runner.
+      - name: Integration tests (changed modules)
+        run: |
+          ./mvnw -pl "${{ needs.changes.outputs.list }}" failsafe:integration-test failsafe:verify --batch-mode --no-transfer-progress
