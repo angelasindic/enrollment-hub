@@ -36,8 +36,9 @@ structural design is dictated by the following prioritized Service Level Objecti
 Fraud detection is an evolving threat landscape. The primary driver for structural separation is the need to 
 provide an extensibility mechanism to accommodate future signals as they are identified.
 
-* **Mechanism:** A RabbitMQ topic-exchange pattern allows new check services to self-subscribe and participate in the
-  scatter-gather flow without touching the core enrollment logic.
+* **Mechanism:** A per-signal command-dispatch pattern lets new check services join the scatter-gather
+  as pure listeners; adding one is a localized, additive change in the decision engine (a `SignalConfig` entry, a
+  request builder, a result listener), never a rework of the scoring logic.
 
 #### II. Fault Isolation
 
@@ -169,7 +170,7 @@ classification without a current assignment are specified in ADR-016.
 The 5 RPS figure describes ingress volume only. The internal concurrency envelope is driven by downstream tail
 latency (>1 s) and fan-out to multiple scoring services, not by raw request rate.
 
-**Implications for the rest of this document.** The decisions that follow — including the three-exchange messaging
+**Implications for the rest of this document.** The decisions that follow — including the four-exchange messaging
 architecture (ADR-003), separate geo-scoring service (ADR-002), durable correlation record (ADR-015),
 and atomic Redis Lua (ADR-014) — are justified against the three core forces of **Integrity, Correctness, and Privacy**,
 rather than raw throughput.
@@ -265,9 +266,9 @@ gates before any async work begins, (b) tracks parallel check completion across 
 timeout and fail-open policies, and (d) emits a final decision. This coordination complexity justifies a dedicated
 decision engine module.
 
-**Extensibility for future fraud signals** requires that new checks plug in without changing dispatch logic. A
-topic-exchange subscription pattern achieves this only if check services are independent deployable units. A dedicated
-Internal Fraud Detection module demonstrates this seam, even as a stub.
+**Extensibility for future fraud signals** justifies a dedicated Internal Fraud Detection module — an independent
+deployable unit that demonstrates the seam by which new checks attach (even as a stub). The dispatch mechanism is
+covered in §1.1.I and §6.2.
 
 Cross-service contract stability requires that event schemas evolve without forcing lockstep deployments. A shared
 Contracts module, owned by the event producer, gives consumers forward-compatible deserialization without runtime
@@ -279,14 +280,14 @@ These four modules map directly to the C4 container diagram in §5.2.
 
 ![Container Overview](./structurizr/images/EnrollmentHubContainers.png "Container Overview")
 
-Traffic is split across three exchanges: one for intake, one for internal scoring events, and one for outbound
-decisions.
+Traffic is split across four exchanges: one for intake, two for the scatter-gather (a request channel carrying commands
+out to the checks and a result channel carrying replies back), and one for outbound decisions.
 An ingress exchange acts as the single durable entry point into the decision engine and is the only
-channel through which a request enters the asynchronous pipeline. An internal pipeline exchange carries
-scatter-gather traffic between the decision engine and the check services. An outbound exchange delivers final
-decisions to the Account Service. Each service declares its own queues and bindings at startup, and new consumers
-attach to the relevant exchange without changes to any publisher. The detailed topology — exchange names, queue
-declarations, routing keys, dead-letter wiring — is documented in ADR-003.
+channel through which a request enters the asynchronous pipeline. The decision engine dispatches one command per
+applicable signal on the request exchange and gathers each reply on the result exchange. An outbound exchange delivers
+final decisions to the Account Service. The decision engine owns the request channel and its per-signal queues; check
+services attach as listeners. The detailed topology — exchange names, queue declarations, routing keys, dead-letter
+wiring — is documented in ADR-003.
 
 Simplification: In production, Fraud and Account Service would likely use their own broker.
 
@@ -353,10 +354,10 @@ sequenceDiagram
     Note over O, F: Independent checks run concurrently
 
     par
-        O ->> G: EnrollmentAccepted
+        O ->> G: geo.score command (shipping address)
         G -->> O: GeoScoreResult (LOW / MEDIUM / HIGH / EXTREME)
     and
-        O ->> F: EnrollmentAccepted
+        O ->> F: fraud.check command (enrollment data)
         F -->> O: FraudCheckResult (OK / FAILED / NO_RESULT)
     end
 
@@ -364,35 +365,35 @@ sequenceDiagram
     O ->> AS: EnrollmentDecision
 ```
 
-The decision engine never dispatches to checks directly — it announces `EnrollmentAccepted` and the relevant checks
-self-subscribe. The diagram is schematic: the acknowledgement returned to the applicant and the dispatch of
-`EnrollmentAccepted` to the check services are mediated by the decision engine's ingress channel rather than happening
-in the same code path.
+The diagram is schematic: the acknowledgement returned to the applicant and the dispatch of the per-signal commands are
+mediated by the decision engine's intake channel rather than happening in the same code path. The dispatch mechanics are
+detailed in §6.2.
 
 ### 6.2 Routing strategy
 
-The decision engine publishes once; consumers subscribe by routing key.
+The decision engine dispatches one command per applicable signal; each check consumes its own command and replies.
 The detailed mechanics, routing key strings, queue declarations, retry and DLQ configuration, live in ADR-003 and in the
 decision engine design document. There are three steps:
 
 **Step 0 - Durable ingress.** The REST endpoint validates the prerequisite token synchronously and, on success,
 publishes a single durable message to the ingress exchange. No database write happens in the HTTP request thread.
 The decision engine's own intake consumer then reads that message, creates the correlation record, commits, and
-publishes the scatter-gather trigger event to the internal pipeline exchange, only after the correlation row is
-durably committed. This sequencing eliminates the dual-write problem at the entry point and guarantees that no
-check service can receive a trigger event for a correlation record that does not yet exist (section 8.6).
+dispatches the per-signal commands on the request exchange, only after the correlation row is durably committed. This
+sequencing eliminates the dual-write problem at the entry point and guarantees that no check service can receive a
+command for a correlation record that does not yet exist (section 8.6).
 
-**Step 1 - Conditional routing.** The decision engine publishes a single `EnrollmentAccepted` event with a
-payment-type-specific routing key. Geo-Scoring subscribes only to credit-card routes; identity verification
-subscribes only to invoice routes. The decision engine publishes once; the broker delivers selectively based on
-subscription bindings. The decision engine never dispatches directly to individual check services (ADR-002).
+**Step 1 - Per-signal dispatch.** The decision engine derives the applicable signals for the route from `SignalConfig`
+and publishes one command per signal to the `enrollment.check.request` exchange, routed by signal name (`geo.score`,
+`fraud.check`). On the credit-card route this is `geo.score` + `fraud.check`; on the invoice route, `fraud.check` only.
+Each command carries only the data its check needs (least-privilege payload).
 
-**Step 2 - Scatter-gather within the route.** Internal Fraud Detection subscribes to all enrollment events
-regardless of payment type. All active subscribers consume the event concurrently; results arrive asynchronously
-and are correlated by a unique request identifier. The decision engine aggregates results via a durable correlation
-record before emitting the final decision (ADR-003).
+**Step 2 - Gather and aggregate.** Each check consumes its command, performs its work, and publishes a result on the
+`enrollment.check.result` exchange keyed by signal name. Results are correlated by `enrollmentId` and recorded against
+the durable correlation record; once every applicable signal has settled, the decision engine aggregates and emits the
+final decision (ADR-003).
 
-New checks plug in by adding a queue binding — no changes to the decision engine are required (ADR-003).
+The applicable-signal set is defined once in `SignalConfig`, which seeds both the dispatch and the gather-set, so the
+two cannot drift (ADR-003).
 
 ### 6.3 Prerequisite Token Rejection
 
@@ -402,7 +403,7 @@ requested route, the decision engine rejects the request at entry:
 1. Submission is rejected with a permission error.
 2. The attempt is logged.
 3. No correlation record is created.
-4. No `EnrollmentAccepted` is published.
+4. No check commands are dispatched.
 5. No downstream processing occurs.
 
 This is the shortest path through the system. Validation rules and the specific token / payment-type combinations are in
@@ -561,7 +562,8 @@ and geocoding cache; raw addresses are transient in the event bus only. See §8.
 |----------------------------------------|--------------------------------|------------------------------------|
 | Enrollment data (name, email, address) | Account Service (out of scope) | persistent store (out of scope)    |
 | Enrollment state                       | Decision-Engine                | PostgreSQL (correlation DB)        |
-| Raw address string                     | Decision-Engine → Geo-Scoring  | RabbitMQ event payload (transient) |
+| Raw address string                     | Decision-Engine → Geo-Scoring  | `geo.score` command payload (transient) — shipping address only |
+| Enrollment data (for fraud check)      | Decision-Engine → Fraud Detection | `fraud.check` command payload (transient) — full enrollment data |
 | Geocoded coordinates                   | Geo-Scoring                    | Redis/Valkey Geo-Index (48h TTL)   |
 | Geocoding cache                        | Geo-Scoring                    | Redis/Valkey (90-day TTL by default; configurable) |
 | Geo-score result                       | Geo-Scoring → decision engine  | RabbitMQ → correlation DB          |
@@ -580,7 +582,7 @@ and geocoding cache; raw addresses are transient in the event bus only. See §8.
 ### 8.6 Entry-Point Durability and Causal Ordering
 
 The original enrollment entry point performed two writes in a single request thread: it inserted a correlation record
-into PostgreSQL and then published an `EnrollmentAccepted` event to RabbitMQ. Because no transaction spans both systems,
+into PostgreSQL and then dispatched the downstream check commands to RabbitMQ. Because no transaction spans both systems,
 a crash between the two leaves an inconsistent state. The direction of the gap determines the symptom. If the publish
 precedes the database commit, the broker may deliver the event to a fast check service before the in-flight `INSERT` is
 visible under PostgreSQL's read-committed isolation; the result handler finds no correlation row and silently drops the
@@ -596,7 +598,7 @@ the hook fires in process memory; a crash between commit and hook completion los
 redelivery. The third **inverts the write order entirely**: the REST endpoint publishes a durable intake message to a
 point-to-point queue and does nothing else. A single decision-engine consumer reads the intake message, delegates the
 correlation record insertion to an inner `@Transactional` service (the transaction commits before control returns to the
-listener), and then publishes the downstream `EnrollmentAccepted` event in non-transactional listener code. If the
+listener), and then dispatches the downstream check commands in non-transactional listener code. If the
 publish fails, the exception propagates to the Spring AMQP container, which NACKs the intake message and causes the
 broker to redeliver. The `enrollmentId` unique constraint guards against races, but the idempotency check is the primary
 mechanism: the second pass finds the existing correlation record via existsById, returns without inserting, and retries
@@ -605,10 +607,10 @@ the publish.
 The third option was chosen because it provides the same end-to-end durability as the Transactional Outbox without
 additional infrastructure. The intake queue itself serves as the durable record of intent: an unacknowledged message is
 the only cursor of work in flight. Because the database transaction is committed before the publish begins, no consumer
-on the internal event bus can observe an `EnrollmentAccepted` for a correlation record that has not yet committed. The
+on the internal event bus can observe a check command for a correlation record that has not yet committed. The
 listener is the single sequential gatekeeper for the entire pipeline.
 
-On redelivery after a publish failure, the downstream `EnrollmentAccepted` may be published a second time. This is
+On redelivery after a publish failure, the downstream check commands may be dispatched a second time. This is
 harmless because all consumers on the internal pipeline are idempotent (ADR-003). The trade-off accepted in this design
 is a small volume of duplicate internal events in exchange for avoiding an outbox table and relay process at the current
 volume envelope.
@@ -651,7 +653,7 @@ and consider a separate exchange per priority class.
 
 | Boundary                                        | Guarantee                                                                                             | Mechanism                                                  | Source           |
 |-------------------------------------------------|-------------------------------------------------------------------------------------------------------|------------------------------------------------------------|------------------|
-| Entry point: correlation record ↔ trigger event | Causal — no consumer observes `EnrollmentAccepted` for an uncommitted correlation record              | Intake queue + publish-after-commit                        | §8.6, ADR-003    |
+| Entry point: correlation record ↔ trigger event | Causal — no consumer observes a check command for an uncommitted correlation record              | Intake queue + publish-after-commit                        | §8.6, ADR-003    |
 | Correlation record (per `enrollmentId`)            | Serializable updates; exactly-once decision trigger under concurrent result arrivals                  | `SELECT FOR UPDATE` + ACK-after-commit + idempotency guard | ADR-015          |
 | Geo-index density check + write (per request)   | Atomic across check and write; no TOCTOU race between concurrent enrollments                          | Single Redis Lua script                                    | ADR-014          |
 | Cross-service event delivery                    | At-least-once + idempotent consumers (effectively-once)                                               | §8.7                                                       | ADR-003, ADR-015 |

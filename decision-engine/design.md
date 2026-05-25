@@ -18,7 +18,7 @@ touched.
 > below is the target shape for MVP 2.
 
 ```java
-// decisionengine / api / EnrollmentController.java
+// decision engine / api / EnrollmentController.java
 //
 // Target:  JDK 25 / Spring Boot 4.x / Spring AMQP 4.x
 // Status:  Reference
@@ -60,7 +60,7 @@ performs two operations in strict order, across separate failure domains:
 1. **Persist the correlation record** via `EnrollmentCorrelationService.saveIfAbsent()`,
    an inner `@Transactional` service. The transaction commits and releases before control
    returns to the listener.
-2. **Publish the downstream trigger event** to `enrollment.events`. This occurs only
+2. **Dispatch the per-signal commands** to `enrollment.check.request`. This occurs only
    after the database commit is durable.
 
 This commit-before-publish sequence provides the causal ordering guarantee described
@@ -71,22 +71,24 @@ redelivery. On redelivery, `saveIfAbsent()` finds the existing correlation recor
 the listener retries the publish. 
 The `EnrollmentCorrelationService` handles the transactional boundary and idempotent delivery.
 
-### RabbitMQ routing key strategy
+### RabbitMQ dispatch strategy
 
-`EnrollmentIntakeListener` publishes `EnrollmentAccepted` to the `enrollment.events` topic exchange. The routing key
-encodes the payment type:
+After committing the correlation record, `EnrollmentIntakeListener` dispatches one command per applicable signal to the
+`enrollment.check.request` direct exchange, routed by signal name. The applicable set is derived from
+`SignalConfig.initializeFor(paymentType)` — the same source that seeds the correlation record's signal map, so the
+dispatch-set and the gather-set are identical by construction.
 
-```
-payment_type = CREDIT_CARD → routing key: enrollment.created.credit_card
-payment_type = INVOICE     → routing key: enrollment.created.invoice
-```
+| PaymentType   | Commands dispatched (routing key → payload)                        |
+|---------------|--------------------------------------------------------------------|
+| `CREDIT_CARD` | `geo.score` → shipping address; `fraud.check` → enrollment data    |
+| `INVOICE`     | `fraud.check` → enrollment data                                    |
 
-Queue bindings on `enrollment.events`:
-
-| Service                        | Binding key                      | Activated on     |
-|--------------------------------|----------------------------------|------------------|
-| Geo-Scoring queue              | `enrollment.created.credit_card` | CREDIT_CARD only |
-| Internal Fraud Detection queue | `enrollment.created.*`           | Both routes      |
+Each command carries a least-privilege payload: geo-scoring receives only the shipping address it needs to geocode;
+fraud detection receives the full enrollment data. The decision engine owns the `enrollment.check.request` exchange and
+the per-signal request queues (`geo.scoring.requests.queue`, `fraud.detection.requests.queue`); check services attach as
+`@RabbitListener`s without redeclaring them (ADR-003 §Channel ownership). Results return on the
+`enrollment.check.result` direct exchange, keyed by signal name (`geo.score`, `fraud.check`), into the decision engine's
+per-signal result queues (`decision-engine.geo-score.results.queue`, `decision-engine.fraud-check.results.queue`).
 
 There is no Identity queue. The eIDAS Connector issues a signed JWT as a prerequisite
 gate validated synchronously by the REST endpoint (MVP 2 — see ADR-007 / ADR-011); it
@@ -94,12 +96,10 @@ does not subscribe to RabbitMQ events. Identity is not represented as a signal i
 correlation record's signal map — prerequisites are outside the ADR-016 signal
 classification model.
 
-Internal Fraud Detection is active in MVP 1 as a stub: it subscribes to
-`enrollment.created.*`, consumes `EnrollmentAccepted`, and always emits
-`FraudCheckResult(OK)` without performing any real analysis. The `FRAUD_CHECK` signal
-is therefore initialised to `PENDING` on both routes in MVP 1. The stub exists to
-validate the full end-to-end wiring so that a real implementation can be substituted
-in Phase 2 with no decision-engine changes.
+Internal Fraud Detection has no worker yet: the decision engine dispatches `fraud.check` commands to
+`fraud.detection.requests.queue`, where they accumulate until the fraud worker is deployed as a pure listener. Until
+then `FRAUD_CHECK` settles via the timeout poller's fail-open path (ADR-010). The `FRAUD_CHECK` signal is initialised to
+`PENDING` on both routes.
 
 ### Correlation Record
 
@@ -122,8 +122,8 @@ Indexes:
 
 The `enrollment_id` PRIMARY KEY is what makes the intake listener idempotent against
 broker redelivery. It is not optional — without it, a redelivered intake message
-could create a duplicate correlation row, which would in turn produce a duplicate
-`EnrollmentAccepted` event and have the signal services run twice for the same
+could create a duplicate correlation row, which would in turn produce duplicate
+check commands and have the signal services run twice for the same
 request.
 
 `decision_id` is a freshly generated UUID set when the decision is recorded; it is
@@ -260,16 +260,16 @@ map.
 flowchart TD
     POST["POST /accounts"] --> validate{"Validate<br/>Credit_Card_JWT<br/>(MVP 2)"}
     validate -- invalid --> reject["403 Rejected"]
-    validate -- valid --> intakePub["Publish EnrollmentRequest<br/>to enrollment.intake<br/>routing key: enrollment.request"]
+    validate -- valid --> intakePub["Publish EnrollmentRequest<br/>to enrollment.intake<br/>routing key: enrollment.intake"]
     intakePub --> http202["202 Accepted"]
 
     intakePub -.->|broker delivery| intakeListen["EnrollmentIntakeListener<br/>consumes EnrollmentRequest"]
     intakeListen --> startTx["@Transactional saveIfAbsent()<<br/>EnrollmentEntity.create()<<br/>signals: {GEO_SCORE: PENDING,<br/>FRAUD_CHECK: PENDING}"]
     startTx --> commit["COMMIT"]
-    commit --> postCommit["Publish EnrollmentAccepted<br/>routing key: enrollment.created.credit_card"]
+    commit --> postCommit["Dispatch per-signal commands<br/>to enrollment.check.request<br/>geo.score + fraud.check"]
 
-    postCommit --> geo["Geo-Scoring<br/>consumes event"]
-    postCommit --> fraud["Fraud Detection<br/>consumes event"]
+    postCommit --> geo["Geo-Scoring<br/>consumes geo.score"]
+    postCommit --> fraud["Fraud Detection<br/>consumes fraud.check"]
 
     geo -- "GeoScoreResult" --> wGeo["withSignalResult(GEO_SCORE, SignalState)"]
     fraud -- "FraudCheckResult" --> wFraud["withSignalResult(FRAUD_CHECK, SignalState)"]
@@ -325,15 +325,16 @@ predicate.
   enums may carry additional values that the decision-engine domain does not need.
   `EnumCompatibilityTest` asserts the subset relationship (ADR-009).
 - **Extensibility.** Adding a new signal requires (1) declaring a new `SignalConfig`
-  value with its applicable routes and `GateClassification`, (2) the consumer
-  service publishing a result event the decision-engine listener consumes, and (3)
-  no change to the aggregation logic — dispatch is on `GateClassification`, not
-  on signal identity. No schema migration is required for the JSONB `signals` column.
+  value with its applicable routes and `GateClassification`, (2) a request builder and
+  request queue so the decision engine dispatches its command, (3) a result listener
+  that records the reply, and (4) the worker itself as a pure listener. The aggregation
+  logic is untouched — dispatch is on `GateClassification`, not on signal identity — and
+  no schema migration is required for the JSONB `signals` column.
 
 **Event contracts** are defined as Java records in the shared `enrollment-hub:contracts`
-module (ADR-009). The canonical field definitions for `EnrollmentAccepted`,
-`GeoScoreResult`, `FraudCheckResult`, and `EnrollmentDecisionEvent` live in that
-module. The `SignalProcessingState`, `SignalConfig`, and `GateClassification` types
+module (ADR-009). The canonical field definitions for the per-signal request commands
+(`GeoScoreRequest`, `FraudCheckRequest`), the result events (`GeoScoreResult`,
+`FraudCheckResult`), and `EnrollmentDecisionEvent` live in that module. The `SignalProcessingState`, `SignalConfig`, and `GateClassification` types
 are decision-engine-internal and not part of the shared contract. `EnrollmentRequest`
 is also decision-engine-internal — it flows only between the REST endpoint and
 `EnrollmentIntakeListener` and is not consumed by any other service.
@@ -390,7 +391,7 @@ settled signal map into the contracts `EnrollmentDecisionEvent` for publishing.
 
 Two metrics on the intake path are worth wiring into the dashboard from day one.
 The first, `enrollment_intake_publish_failures_total`, increments whenever the
-post-commit publish of `EnrollmentAccepted` throws. A non-zero value means the
+post-commit dispatch of the check commands throws. A non-zero value means the
 broker redelivery path is being exercised — the correlation record was committed
 but the downstream publish failed and the intake message was nacked for retry.
 This is recoverable in steady state but indicates broker instability or a
@@ -400,7 +401,7 @@ their retry budget without succeeding. A non-zero depth here means an intake
 message could not be processed even after retries and requires manual inspection.
 
 These two metrics together cover the residual orphan-record window described in
-architecture document §8: a correlation record exists but `EnrollmentAccepted`
-was not published. Either the metric is non-zero (post-commit publish failed) or
+architecture document §8: a correlation record exists but the check commands
+were not dispatched. Either the metric is non-zero (post-commit publish failed) or
 the intake DLQ has a message (retry budget exhausted). If both are zero, no
 orphan records exist.

@@ -21,7 +21,7 @@ monolith). However, two constraints make extraction the right choice:
 Extract the geo-scoring logic into a separate microservice, communicating with the decision-engine via asynchronous
 events (RabbitMQ).
 
-The geo-scoring service consumes an `EnrollmentAccepted` event, performs geocoding + GEOSEARCH + threshold evaluation,
+The geo-scoring service consumes a `GeoScoreRequest` command, performs geocoding + GEOSEARCH + threshold evaluation,
 and emits a `GeoScoreResult` event. It owns its Redis instance, its Nominatim instance, its libpostal normalization
 service, and its threshold configuration. It can be restarted, redeployed, or scaled without affecting the decision-engine.
 
