@@ -1,6 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine.domain;
 
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -40,6 +41,20 @@ public enum SignalConfig {
 
     public boolean applicableTo(PaymentType paymentType) {
         return applicableRoutes.contains(paymentType);
+    }
+
+    /**
+     * The signals applicable to the given route, in enum-declaration order. Single source of the
+     * dispatch-set; the same applicability also seeds the gather-set via {@link #initializeFor}.
+     */
+    public static Set<SignalConfig> applicableSignals(PaymentType paymentType) {
+        var applicable = EnumSet.noneOf(SignalConfig.class);
+        for (var sc : values()) {
+            if (sc.applicableTo(paymentType)) {
+                applicable.add(sc);
+            }
+        }
+        return applicable;
     }
 
     public GateClassification classification() {

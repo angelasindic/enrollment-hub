@@ -2,10 +2,11 @@ package dev.sindic.enrollmenthub.decisionengine.service;
 
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
-import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentAcceptedPublisher;
+import dev.sindic.enrollmenthub.decisionengine.amqp.CheckRequestPublisher;
 import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentIntakePublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.PendingEnrollmentResponse;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -35,7 +36,7 @@ public class EnrollmentIntakeService {
     private final EnrollmentRepository repository;
     private final EnrollmentCorrelationService correlationService;
     private final EnrollmentIntakePublisher intakePublisher;
-    private final EnrollmentAcceptedPublisher acceptedPublisher;
+    private final CheckRequestPublisher checkRequestPublisher;
     private final JsonMapper jsonMapper;
     private final Clock clock;
     private final Duration timeout;
@@ -43,14 +44,14 @@ public class EnrollmentIntakeService {
     public EnrollmentIntakeService(EnrollmentRepository repository,
                                    EnrollmentCorrelationService correlationService,
                                    EnrollmentIntakePublisher intakePublisher,
-                                   EnrollmentAcceptedPublisher acceptedPublisher,
+                                   CheckRequestPublisher checkRequestPublisher,
                                    JsonMapper jsonMapper,
                                    Clock clock,
                                    @Value("${decision-engine.scatter-gather.timeout}") Duration timeout) {
         this.repository = repository;
         this.correlationService = correlationService;
         this.intakePublisher = intakePublisher;
-        this.acceptedPublisher = acceptedPublisher;
+        this.checkRequestPublisher = checkRequestPublisher;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
         this.timeout = timeout;
@@ -98,9 +99,11 @@ public class EnrollmentIntakeService {
                         command.enrollmentId());
             }
 
-            // Publish after confirmed DB commit. Exception here → NACK → redelivery.
+            // Dispatch after confirmed DB commit. Exception here → NACK → redelivery.
+            // One command per applicable signal; the applicable set comes from SignalConfig,
+            // the same source that seeded the correlation row's gather-set.
             EnrollmentData enrollmentData = EnrollmentMapper.toData(command);
-            acceptedPublisher.publish(new EnrollmentEvent(createdAt, enrollmentData));
+            checkRequestPublisher.dispatch(enrollmentData, SignalConfig.applicableSignals(command.paymentType()));
 
         } finally {
             MDC.remove("enrollmentId");

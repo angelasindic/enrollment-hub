@@ -4,13 +4,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.core.Binding;
-import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
-import org.springframework.amqp.core.ExchangeBuilder;
-import org.springframework.amqp.core.Queue;
-import org.springframework.amqp.core.QueueBuilder;
-import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.config.RetryInterceptorBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -23,8 +17,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.VirtualThreadTaskExecutor;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.time.Duration;
-
 @Slf4j
 @Configuration
 @EnableConfigurationProperties(AmqpProperties.class)
@@ -32,14 +24,14 @@ class AmqpConfig {
 
     static final String PUBLISH_FAILURE_METRIC = "geo_scoring_publish_failures_total";
 
-    static final String EXCHANGE           = "enrollment.events";
-    static final String QUEUE              = "geo.scoring.queue";
-    static final String ROUTING_KEY        = "enrollment.created.credit_card";
-    static final String RESULT_ROUTING_KEY = "geo.score.completed";
+    // Request queue — owned and declared by the decision-engine (ADR-003 §Channel ownership).
+    // Geo-scoring attaches a listener by name and does not redeclare it.
+    static final String REQUEST_QUEUE = "geo.scoring.requests.queue";
+    static final String REQUEST_DLQ   = "geo.scoring.requests.queue.dlq";
 
-    static final String DLX               = "geo.scoring.dlx";
-    static final String DLQ               = "geo.scoring.queue.dlq";
-    static final String DLQ_ROUTING_KEY   = "geo.scoring.dead-letter";
+    // Result channel — geo-scoring publishes GeoScoreResult here for the decision-engine.
+    static final String RESULT_EXCHANGE    = "enrollment.check.result";
+    static final String RESULT_ROUTING_KEY = "geo.score";
 
     private static final int    MAX_RETRIES      = 3;
     private static final long   INITIAL_INTERVAL = 1_000L;
@@ -56,65 +48,31 @@ class AmqpConfig {
     private static final int CONCURRENT_CONSUMERS     = 8;
     private static final int MAX_CONCURRENT_CONSUMERS = 24;
 
+    /** Result exchange (shared; also declared by the decision-engine). Declared idempotently. */
+    @Bean
+    DirectExchange resultExchange() {
+        return new DirectExchange(RESULT_EXCHANGE, true, false);
+    }
+
     /**
-     * DLQ retention bound (geo-scoring review §C7 checklist). RabbitMQ drops messages whose
-     * age exceeds the queue {@code x-message-ttl}; without this the DLQ would grow forever.
-     * Seven days gives operators a working week to triage before automatic eviction.
+     * DLQ-depth gauge for the request queue's dead-letter queue. The request queue and its DLX/DLQ
+     * are declared by the decision-engine (ADR-003 §Channel ownership); a passive declare reads the
+     * depth without redeclaring.
      */
-    private static final Duration DLQ_TTL = Duration.ofDays(7);
-
-    /** Durable topic exchange shared across all services. Declared idempotently at startup. */
-    @Bean
-    TopicExchange enrollmentExchange() {
-        return ExchangeBuilder.topicExchange(EXCHANGE).durable(true).build();
-    }
-
-    /** Consumer-owned durable queue — routes rejected messages to the dead-letter exchange. */
-    @Bean
-    Queue geoScoringQueue() {
-        return QueueBuilder.durable(QUEUE)
-                .deadLetterExchange(DLX)
-                .deadLetterRoutingKey(DLQ_ROUTING_KEY)
-                .build();
-    }
-
-    @Bean
-    DirectExchange deadLetterExchange() {
-        return new DirectExchange(DLX, true, false);
-    }
-
-    @Bean
-    Queue deadLetterQueue() {
-        return QueueBuilder.durable(DLQ)
-                .ttl((int) DLQ_TTL.toMillis())
-                .build();
-    }
-
-    @Bean
-    Binding deadLetterBinding(Queue deadLetterQueue, DirectExchange deadLetterExchange) {
-        return BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange).with(DLQ_ROUTING_KEY);
-    }
-
     @Bean
     Gauge dlqDepthGauge(RabbitTemplate rabbitTemplate, MeterRegistry meterRegistry) {
         return Gauge.builder("rabbitmq.dlq.depth", rabbitTemplate, template -> {
                     try {
-                        var ok = template.execute(ch -> ch.queueDeclarePassive(DLQ));
+                        var ok = template.execute(ch -> ch.queueDeclarePassive(REQUEST_DLQ));
                         return ok != null ? (double) ok.getMessageCount() : 0.0;
                     } catch (Exception e) {
-                        log.warn("Could not poll DLQ depth queue={}", DLQ);
+                        log.warn("Could not poll DLQ depth queue={}", REQUEST_DLQ);
                         return 0.0;
                     }
                 })
-                .tag("queue", DLQ)
-                .description("Messages waiting in the geo-scoring dead-letter queue")
+                .tag("queue", REQUEST_DLQ)
+                .description("Messages waiting in the geo-scoring request dead-letter queue")
                 .register(meterRegistry);
-    }
-
-    /** Binds geo-scoring queue to the CREDIT_CARD routing key only (ADR-003). */
-    @Bean
-    Binding geoScoringBinding(Queue geoScoringQueue, TopicExchange enrollmentExchange) {
-        return BindingBuilder.bind(geoScoringQueue).to(enrollmentExchange).with(ROUTING_KEY);
     }
 
     /**

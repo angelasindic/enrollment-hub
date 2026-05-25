@@ -52,7 +52,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
                 Map.of(100, 5, 250, 12), List.of(100, 250),
                 48.8566, 2.3522);
 
-        rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
+        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
@@ -72,7 +72,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
                 enrollmentId, C_LOW, null,
                 Map.of(), List.of(), 52.52, 13.405);
 
-        rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
+        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
@@ -83,7 +83,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
         var duplicate = new GeoScoreResult(
                 enrollmentId, C_HIGH, null,
                 Map.of(100, 99), List.of(100), 52.52, 13.405);
-        rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, duplicate);
+        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, duplicate);
 
         await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
@@ -99,10 +99,10 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
                 unknownId, C_HIGH, null,
                 Map.of(), List.of(), 48.8566, 2.3522);
 
-        rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
+        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-            var dlqMessage = rabbitTemplate.receive(AmqpConfig.GEO_SCORE_DLQ, 100);
+            var dlqMessage = rabbitTemplate.receive(AmqpConfig.GEO_SCORE_RESULT_DLQ, 100);
             assertThat(dlqMessage).isNotNull();
         });
         assertThat(repository.findById(unknownId)).isEmpty();
@@ -131,7 +131,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
                 enrollmentId, C_LOW, null,
                 Map.of(100, 1), List.of(), 52.52, 13.405);
 
-        rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
+        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
@@ -162,7 +162,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
                 enrollmentId, null, "geocoding_failed",
                 Map.of(), List.of(), null, null);
 
-        rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
+        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
@@ -175,22 +175,22 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
     @Test
     void dlqDepthGauge_reflectsDlqDepth() {
-        amqpAdmin.purgeQueue(AmqpConfig.GEO_SCORE_DLQ);
+        amqpAdmin.purgeQueue(AmqpConfig.GEO_SCORE_RESULT_DLQ);
 
         var unknownId = UUID.randomUUID();
         var event = new GeoScoreResult(
                 unknownId, C_HIGH, null,
                 Map.of(), List.of(), 48.8566, 2.3522);
-        rabbitTemplate.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.GEO_SCORE_ROUTING_KEY, event);
+        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var gauge = meterRegistry.find("rabbitmq.dlq.depth")
-                    .tag("queue", AmqpConfig.GEO_SCORE_DLQ).gauge();
+                    .tag("queue", AmqpConfig.GEO_SCORE_RESULT_DLQ).gauge();
             assertThat(gauge).isNotNull();
             assertThat(gauge.value()).isGreaterThan(0);
         });
 
-        amqpAdmin.purgeQueue(AmqpConfig.GEO_SCORE_DLQ);
+        amqpAdmin.purgeQueue(AmqpConfig.GEO_SCORE_RESULT_DLQ);
     }
 
     private void seedCreditCardRequest(UUID enrollmentId) {

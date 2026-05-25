@@ -16,9 +16,9 @@ public class RabbitDlqMetricsConfig {
 
     private static final List<DlqGaugeDef> DLQ_GAUGES = List.of(
             new DlqGaugeDef("rabbitmq.dlq.depth",
-                    AmqpConfig.GEO_SCORE_DLQ,
+                    AmqpConfig.GEO_SCORE_RESULT_DLQ,
                     "Messages waiting in the dead-letter queue from the decision-engine: " +
-                            AmqpConfig.GEO_SCORE_DLQ),
+                            AmqpConfig.GEO_SCORE_RESULT_DLQ),
             new DlqGaugeDef("rabbitmq.dlq.depth",
                     AmqpConfig.ENROLLMENT_INTAKE_DLQ,
                     "Messages waiting in the dead-letter queue from the decision-engine: " +

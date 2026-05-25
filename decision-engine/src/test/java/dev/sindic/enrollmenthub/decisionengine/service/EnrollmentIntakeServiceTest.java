@@ -1,7 +1,8 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
+import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
-import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentAcceptedPublisher;
+import dev.sindic.enrollmenthub.decisionengine.amqp.CheckRequestPublisher;
 import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentIntakePublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
@@ -48,7 +49,7 @@ class EnrollmentIntakeServiceTest {
 
     @Mock EnrollmentRepository repository;
     @Mock EnrollmentIntakePublisher intakePublisher;
-    @Mock EnrollmentAcceptedPublisher acceptedPublisher;
+    @Mock CheckRequestPublisher checkRequestPublisher;
     @Mock EnrollmentCorrelationService correlationService;
 
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
@@ -57,7 +58,7 @@ class EnrollmentIntakeServiceTest {
 
     private EnrollmentIntakeService buildService() {
         return new EnrollmentIntakeService(
-                repository, correlationService, intakePublisher, acceptedPublisher, JSON_MAPPER, clock, TIMEOUT);
+                repository, correlationService, intakePublisher, checkRequestPublisher, JSON_MAPPER, clock, TIMEOUT);
     }
 
     @Nested
@@ -71,7 +72,7 @@ class EnrollmentIntakeServiceTest {
 
             assertThat(response.enrollmentId()).isEqualTo(command.enrollmentId().toString());
             then(repository).should(never()).save(any());
-            then(acceptedPublisher).should(never()).publish(any());
+            then(checkRequestPublisher).should(never()).dispatch(any(), any());
 
             var captor = ArgumentCaptor.forClass(EnrollmentEvent.class);
             then(intakePublisher).should().publish(captor.capture());
@@ -103,7 +104,7 @@ class EnrollmentIntakeServiceTest {
                     .hasMessage("broker down");
 
             then(repository).should(never()).save(any());
-            then(acceptedPublisher).should(never()).publish(any());
+            then(checkRequestPublisher).should(never()).dispatch(any(), any());
         }
     }
 
@@ -121,7 +122,7 @@ class EnrollmentIntakeServiceTest {
             buildService().processEnrollment(NOW, command);
 
             then(correlationService).should().saveIfAbsent(NOW, command);
-            then(acceptedPublisher).should().publish(any());
+            then(checkRequestPublisher).should().dispatch(any(), any());
             then(intakePublisher).should(never()).publish(any());
         }
 
@@ -134,9 +135,9 @@ class EnrollmentIntakeServiceTest {
 
             then(correlationService).should().saveIfAbsent(NOW, command);
             then(intakePublisher).should(never()).publish(any());
-            var eventCaptor = ArgumentCaptor.forClass(EnrollmentEvent.class);
-            then(acceptedPublisher).should().publish(eventCaptor.capture());
-            assertThat(eventCaptor.getValue().enrollmentData().paymentType().name()).isEqualTo("CREDIT_CARD");
+            var dataCaptor = ArgumentCaptor.forClass(EnrollmentData.class);
+            then(checkRequestPublisher).should().dispatch(dataCaptor.capture(), any());
+            assertThat(dataCaptor.getValue().paymentType().name()).isEqualTo("CREDIT_CARD");
         }
 
         @Test
@@ -146,9 +147,9 @@ class EnrollmentIntakeServiceTest {
             buildService().processEnrollment(NOW, command);
 
             then(correlationService).should().saveIfAbsent(NOW, command);
-            var eventCaptor = ArgumentCaptor.forClass(EnrollmentEvent.class);
-            then(acceptedPublisher).should().publish(eventCaptor.capture());
-            assertThat(eventCaptor.getValue().enrollmentData().paymentType().name()).isEqualTo("INVOICE");
+            var dataCaptor = ArgumentCaptor.forClass(EnrollmentData.class);
+            then(checkRequestPublisher).should().dispatch(dataCaptor.capture(), any());
+            assertThat(dataCaptor.getValue().paymentType().name()).isEqualTo("INVOICE");
         }
 
         @Test
@@ -159,7 +160,7 @@ class EnrollmentIntakeServiceTest {
                     .isInstanceOf(RuntimeException.class)
                     .hasMessage("DB down");
 
-            then(acceptedPublisher).should(never()).publish(any());
+            then(checkRequestPublisher).should(never()).dispatch(any(), any());
         }
 
         @Test
@@ -167,7 +168,7 @@ class EnrollmentIntakeServiceTest {
             // The @Transactional boundary on saveIfAbsent rolls back the save;
             // this unit test only proves the propagation. The rollback property
             // is covered by EnrollmentIntakeServiceIT.
-            doThrow(new RuntimeException("broker down")).when(acceptedPublisher).publish(any());
+            doThrow(new RuntimeException("broker down")).when(checkRequestPublisher).dispatch(any(), any());
 
             assertThatThrownBy(() -> buildService().processEnrollment(NOW, creditCardCommand()))
                     .isInstanceOf(RuntimeException.class)

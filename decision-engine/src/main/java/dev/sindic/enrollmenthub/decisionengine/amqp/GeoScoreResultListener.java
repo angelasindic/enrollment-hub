@@ -18,7 +18,7 @@ class GeoScoreResultListener {
 
     private final EnrollmentService service;
 
-    @RabbitListener(queues = AmqpConfig.GEO_SCORE_QUEUE)
+    @RabbitListener(queues = AmqpConfig.GEO_SCORE_RESULT_QUEUE)
     void handleGeoScoreResult(GeoScoreResult event) {
         MDC.put("enrollmentId", event.enrollmentId().toString());
         try {

@@ -34,20 +34,17 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * Proves that {@link EnrollmentDecisionPublisher} publishes to
- * {@code enrollment.decisions} (ADR-003 §Layer 3) and not to
- * {@code enrollment.events} (Layer 2). Capture queue stands in for the
+ * {@code enrollment.decisions} (ADR-003 §Layer 3). Capture queue stands in for the
  * account-service consumer queue (the account-service owns its real binding —
  * out of scope for this module).
  */
 class EnrollmentDecisionPublisherIT extends BaseIntegrationTest {
 
     private static final String DECISION_CAPTURE_QUEUE = "test.capture.decisions";
-    private static final String EVENTS_CAPTURE_QUEUE   = "test.capture.events_decision_negative";
 
     @Autowired RabbitTemplate rabbitTemplate;
     @Autowired RabbitAdmin rabbitAdmin;
     @Autowired @Qualifier("enrollmentDecisionsExchange") TopicExchange enrollmentDecisionsExchange;
-    @Autowired @Qualifier("enrollmentExchange") TopicExchange enrollmentExchange;
     @Autowired EnrollmentDecisionPublisher publisher;
 
     @BeforeEach
@@ -57,20 +54,11 @@ class EnrollmentDecisionPublisherIT extends BaseIntegrationTest {
         rabbitAdmin.declareBinding(BindingBuilder.bind(decisionQueue)
                 .to(enrollmentDecisionsExchange)
                 .with(AmqpConfig.DECISION_ROUTING_KEY));
-
-        // Negative-control queue: bound to the OLD exchange (events) with the
-        // same routing key. Should never receive a decision event after M3.
-        var eventsQueue = QueueBuilder.nonDurable(EVENTS_CAPTURE_QUEUE).build();
-        rabbitAdmin.declareQueue(eventsQueue);
-        rabbitAdmin.declareBinding(BindingBuilder.bind(eventsQueue)
-                .to(enrollmentExchange)
-                .with(AmqpConfig.DECISION_ROUTING_KEY));
     }
 
     @AfterEach
     void cleanupCaptureQueues() {
         rabbitAdmin.deleteQueue(DECISION_CAPTURE_QUEUE);
-        rabbitAdmin.deleteQueue(EVENTS_CAPTURE_QUEUE);
     }
 
     @Test
@@ -86,20 +74,6 @@ class EnrollmentDecisionPublisherIT extends BaseIntegrationTest {
             assertThat(received.decisionId()).isEqualTo(event.decisionId());
             assertThat(received.decisionResult()).isEqualTo(DecisionResult.APPROVED);
         });
-    }
-
-    @Test
-    void doesNotPublishDecisionEventToEventsExchange() {
-        // The negative-control queue is bound to enrollment.events with the
-        // same routing key. If M3 regresses (publisher reverts to EXCHANGE),
-        // this assertion will flip from null to a delivered message.
-        publisher.publish(sampleDecisionEvent());
-
-        await().pollDelay(Duration.ofMillis(500)).atMost(Duration.ofSeconds(2))
-                .untilAsserted(() -> assertThat(
-                        rabbitTemplate.receive(EVENTS_CAPTURE_QUEUE, 100))
-                        .as("decision event must not reach the events exchange after M3")
-                        .isNull());
     }
 
     @Test
