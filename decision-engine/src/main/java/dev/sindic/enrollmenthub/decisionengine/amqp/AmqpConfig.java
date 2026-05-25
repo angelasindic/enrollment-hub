@@ -7,6 +7,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.Declarable;
+import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.ExchangeBuilder;
 import org.springframework.amqp.core.Queue;
@@ -26,6 +28,8 @@ import org.springframework.core.task.VirtualThreadTaskExecutor;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * AMQP publisher configuration for the decision-engine.
@@ -76,6 +80,22 @@ public class AmqpConfig {
     static final String GEO_SCORE_DLX         = "decision-engine.geo-score.dlx";
     static final String GEO_SCORE_DLQ         = "decision-engine.geo-score.queue.dlq";
     static final String GEO_SCORE_DLQ_RK      = "decision-engine.geo-score.dead-letter";
+
+    // --- Per-signal scatter-gather topology (ADR-003 §Layer 2) ---
+    // Two direct exchanges, owned by the decision-engine: requests out, results back.
+    // Declared here so the cut-over change can wire dispatch + listeners; nothing
+    // publishes to or consumes from these yet.
+
+    public static final String CHECK_REQUEST_EXCHANGE = "enrollment.check.request";
+    public static final String CHECK_RESULT_EXCHANGE  = "enrollment.check.result";
+
+    public static final String GEO_SCORE_KEY   = "geo.score";
+    public static final String FRAUD_CHECK_KEY = "fraud.check";
+
+    static final String GEO_SCORE_REQUEST_QUEUE   = "geo.scoring.requests.queue";
+    static final String FRAUD_CHECK_REQUEST_QUEUE = "fraud.detection.requests.queue";
+    static final String GEO_SCORE_RESULT_QUEUE    = "decision-engine.geo-score.results.queue";
+    static final String FRAUD_CHECK_RESULT_QUEUE  = "decision-engine.fraud-check.results.queue";
 
     private static final int    MAX_RETRIES      = 3;
     private static final long   INITIAL_INTERVAL = 1_000L;
@@ -244,6 +264,52 @@ public class AmqpConfig {
     @Bean
     Binding geoScoreBinding(Queue geoScoreQueue, TopicExchange enrollmentExchange) {
         return BindingBuilder.bind(geoScoreQueue).to(enrollmentExchange).with(GEO_SCORE_ROUTING_KEY);
+    }
+
+    // --- Per-signal scatter-gather topology beans (ADR-003 §Layer 2) ---
+
+    /**
+     * Declares the request and result direct exchanges and the decision-engine-owned per-signal
+     * queues (each with a dedicated DLX/DLQ). Workers bind a listener to a request queue by name
+     * in the cut-over change; result queues are consumed by the decision-engine's own listeners.
+     */
+    @Bean
+    Declarables checkChannelTopology() {
+        var requestExchange = new DirectExchange(CHECK_REQUEST_EXCHANGE, true, false);
+        var resultExchange  = new DirectExchange(CHECK_RESULT_EXCHANGE, true, false);
+
+        var declarables = new ArrayList<Declarable>();
+        declarables.add(requestExchange);
+        declarables.add(resultExchange);
+        declarables.addAll(deadLetteredQueue(GEO_SCORE_REQUEST_QUEUE,   requestExchange, GEO_SCORE_KEY));
+        declarables.addAll(deadLetteredQueue(FRAUD_CHECK_REQUEST_QUEUE, requestExchange, FRAUD_CHECK_KEY));
+        declarables.addAll(deadLetteredQueue(GEO_SCORE_RESULT_QUEUE,    resultExchange,  GEO_SCORE_KEY));
+        declarables.addAll(deadLetteredQueue(FRAUD_CHECK_RESULT_QUEUE,  resultExchange,  FRAUD_CHECK_KEY));
+        return new Declarables(declarables);
+    }
+
+    /**
+     * A durable queue bound to {@code exchange} on {@code routingKey}, paired with a dedicated
+     * direct DLX/DLQ. Naming convention (ADR-003 §Dead-letter topology): {@code {base}.dlx},
+     * {@code {queue}.dlq}, dead-letter routing key {@code {base}.dead-letter}, where {@code base}
+     * is the queue name without its trailing {@code .queue}.
+     */
+    private static List<Declarable> deadLetteredQueue(String queueName, DirectExchange exchange, String routingKey) {
+        var base = queueName.endsWith(".queue") ? queueName.substring(0, queueName.length() - ".queue".length()) : queueName;
+        var dlxName = base + ".dlx";
+        var dlqName = queueName + ".dlq";
+        var dlqRoutingKey = base + ".dead-letter";
+
+        var queue = QueueBuilder.durable(queueName)
+                .deadLetterExchange(dlxName)
+                .deadLetterRoutingKey(dlqRoutingKey)
+                .build();
+        var dlx = new DirectExchange(dlxName, true, false);
+        var dlq = QueueBuilder.durable(dlqName).build();
+        return List.of(
+                queue, dlx, dlq,
+                BindingBuilder.bind(dlq).to(dlx).with(dlqRoutingKey),
+                BindingBuilder.bind(queue).to(exchange).with(routingKey));
     }
 
     @Bean

@@ -4,6 +4,9 @@ import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.service.UnknownCorrelationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpException;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.Exchange;
+import org.springframework.amqp.core.Queue;
 
 import java.util.UUID;
 
@@ -62,5 +65,39 @@ class AmqpConfigTest {
         var policy = AmqpConfig.listenerRetryPolicy();
 
         assertThat(policy.shouldRetry(new AmqpException("channel reset"))).isTrue();
+    }
+
+    @Test
+    void checkChannelTopology_declaresPerSignalRequestAndResultQueues() {
+        var declarables = new AmqpConfig().checkChannelTopology().getDeclarables();
+
+        var exchangeNames = declarables.stream()
+                .filter(Exchange.class::isInstance).map(d -> ((Exchange) d).getName()).toList();
+        var queueNames = declarables.stream()
+                .filter(Queue.class::isInstance).map(d -> ((Queue) d).getName()).toList();
+
+        assertThat(exchangeNames).contains("enrollment.check.request", "enrollment.check.result");
+        assertThat(queueNames).contains(
+                "geo.scoring.requests.queue", "fraud.detection.requests.queue",
+                "decision-engine.geo-score.results.queue", "decision-engine.fraud-check.results.queue",
+                "geo.scoring.requests.queue.dlq", "fraud.detection.requests.queue.dlq",
+                "decision-engine.geo-score.results.queue.dlq", "decision-engine.fraud-check.results.queue.dlq");
+    }
+
+    @Test
+    void checkChannelTopology_bindsRequestQueuesBySignalName() {
+        var requestBindings = new AmqpConfig().checkChannelTopology().getDeclarables().stream()
+                .filter(Binding.class::isInstance).map(Binding.class::cast)
+                .filter(b -> b.getExchange().equals("enrollment.check.request"))
+                .toList();
+
+        assertThat(requestBindings).anySatisfy(b -> {
+            assertThat(b.getDestination()).isEqualTo("geo.scoring.requests.queue");
+            assertThat(b.getRoutingKey()).isEqualTo("geo.score");
+        });
+        assertThat(requestBindings).anySatisfy(b -> {
+            assertThat(b.getDestination()).isEqualTo("fraud.detection.requests.queue");
+            assertThat(b.getRoutingKey()).isEqualTo("fraud.check");
+        });
     }
 }
