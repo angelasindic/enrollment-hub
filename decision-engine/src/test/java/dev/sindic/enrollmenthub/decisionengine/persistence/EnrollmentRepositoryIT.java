@@ -3,6 +3,7 @@ package dev.sindic.enrollmenthub.decisionengine.persistence;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -216,6 +217,14 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
 
     @Nested
     class FindPendingTimeouts {
+
+        // findPendingTimeouts() is a table-wide query, so committed rows left by the async IT
+        // classes that share this Postgres container would pollute these assertions. Start each
+        // test from a clean table; the delete is rolled back with the test's transaction.
+        @BeforeEach
+        void cleanTable() {
+            repository.deleteAll();
+        }
 
         @Test
         @Transactional
