@@ -18,8 +18,8 @@ and issues a signed JWT containing the verified identity claims. The user attach
 to the account creation request. The decision-engine validates it offline at the PEP/PDP
 boundary, identically to how it validates the Credit_Card_JWT.
 
-**Model B — In-pipeline async check:** The decision-engine dispatches an `EnrollmentAccepted`
-event to an Identity service, which performs eIDAS verification as a scatter-gather
+**Model B — In-pipeline async check:** The decision-engine dispatches a check command
+to an Identity service, which performs eIDAS verification as a scatter-gather
 participant. The Identity service emits `IdentityCheckResult` asynchronously, which the
 decision-engine correlates via the durable correlation record.
 
@@ -34,8 +34,8 @@ eID credential. The SAML assertion travels back through the eIDAS node network t
 Assertion Consumer Service endpoint. This entire exchange requires an active browser
 session and completes in real time before the user can proceed.
 
-This protocol structure makes Model B impossible. There is no point at which an
-`EnrollmentAccepted` event can be published and an eIDAS result awaited asynchronously — the
+This protocol structure makes Model B impossible. There is no point at which a
+check command can be dispatched and an eIDAS result awaited asynchronously — the
 identity assertion arrives at the ACS endpoint during the user's session, not as a response
 to a later async dispatch. A timeout on the SAML redirect does not produce a pipeline
 timeout; it produces a browser-level error that prevents the user from completing the

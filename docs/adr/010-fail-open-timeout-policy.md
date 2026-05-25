@@ -29,7 +29,7 @@ the timeout transition.
 > `@Scheduled` poller calls it yet.
 
 **Option B — Broker-native TTL with dead-letter routing.**
-Each `EnrollmentAccepted` message is published to a per-request "wait queue" with a
+Each dispatched check command is published to a per-request "wait queue" with a
 message TTL equal to the signal deadline. On expiry, RabbitMQ dead-letters the message to
 a `timeout.processor` queue that the decision-engine consumes to trigger the timeout
 transition.

@@ -5,9 +5,9 @@
 
 ## Context
 
-The scatter-gather pipeline (ADR-003) dispatches `EnrollmentAccepted` to multiple signal
-services concurrently. For the CREDIT_CARD route, geo-scoring and fraud detection both
-receive the event and execute in parallel. Their results — `GeoScoreResult` and
+The scatter-gather pipeline (ADR-003) dispatches a per-signal command to each applicable signal
+service concurrently. For the CREDIT_CARD route, geo-scoring and fraud detection each
+receive their command and execute in parallel. Their results — `GeoScoreResult` and
 `FraudCheckResult` — can arrive at the decision-engine at nearly the same time.
 
 The decision-engine must:

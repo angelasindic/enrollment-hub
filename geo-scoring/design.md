@@ -2,13 +2,15 @@
 
 ### Inputs and Outputs
 
-**Consumes:** `EnrollmentAccepted` events delivered to the durable queue `geo.scoring.queue`, bound to the shared
-topic exchange `enrollment.events` with routing key `enrollment.created.credit_card`. The binding is restricted to
-the credit-card route (ADR-003); invoice-route enrollments never reach geo-scoring. The listener
-(`EnrollmentAcceptedListener`) extracts the shipping address from `enrollmentData` and the correlation `enrollmentId`.
+**Consumes:** `GeoScoreRequest` commands delivered to the durable queue `geo.scoring.requests.queue`, which the
+decision engine declares and binds to the `enrollment.check.request` direct exchange with routing key `geo.score`
+(ADR-003 §Channel ownership). Geo-scoring is dispatched only on the credit-card route — the decision engine derives this
+from `SignalConfig` and never sends `geo.score` for invoice enrollments. The command carries a least-privilege payload:
+only the shipping address and the correlation `enrollmentId`, no other enrollment data. The listener
+(`GeoScoreRequestListener`) reads them directly.
 
-**Produces:** `GeoScoreResult` events published to the same `enrollment.events` exchange with routing key
-`geo.score.completed`. The event carries the `enrollmentId` (for correlation by the decision engine), the resolved
+**Produces:** `GeoScoreResult` events published to the `enrollment.check.result` direct exchange with routing key
+`geo.score`. The event carries the `enrollmentId` (for correlation by the decision engine), the resolved
 `RiskLevel` (`LOW` / `MEDIUM` / `HIGH` / `EXTREME`, or `null` on geocoding failure), per-radius neighbour counts,
 the list of triggered radii, the geocoded `(latitude, longitude)` when available, and a `noResultReason` string
 when `riskLevel` is null.
@@ -71,7 +73,7 @@ Rationale:
   Country partitioning bounds each set to the volume of a single market, keeping GEOSEARCH fast.
 - **Natural alignment with the domain.** `countryCode` is a mandatory, validated field on every `Address` record
   (see `contracts` module). The orchestrator rejects requests with missing or unrecognised country codes before
-  `EnrollmentAccepted` is published, so the partition key is always well-defined when geo-scoring executes.
+  the `geo.score` command is dispatched, so the partition key is always well-defined when geo-scoring executes.
 
 `GeoIndexKeyStrategy` is the single source of truth for key generation — all geo-index consumers (density check,
 indexing) must use it rather than constructing keys inline.
@@ -154,7 +156,7 @@ density score for each subsequent attempt. Accounts rejected at the prerequisite
 geo-scoring and are not indexed; they carry no verified address worth recording.
 
 **Country resolution:** `country_code` is a mandatory field in the account creation request payload, validated by the
-orchestrator before `EnrollmentAccepted` is published. A missing or unrecognised country code is rejected at entry (§6.2
+orchestrator before the `geo.score` command is dispatched. A missing or unrecognised country code is rejected at entry (§6.2
 prerequisite rejection path) and never reaches the geo-scoring service. The `{country}` partition key is therefore
 always well-defined when the Lua script executes.
 
@@ -240,11 +242,11 @@ self-heal within one cleanup interval.
 Geo-scoring participates in the pipeline's at-least-once + idempotent-consumer messaging model (architecture.md
 §8.7). The module-level mechanics are:
 
-**Inbound (consumer side, `EnrollmentAcceptedListener`).** Messages are auto-acked after the handler returns
+**Inbound (consumer side, `GeoScoreRequestListener`).** Messages are auto-acked after the handler returns
 normally. On exception, the stateless retry interceptor configured in `AmqpConfig` retries up to 3 times with
 exponential backoff (1 s → 2 s → 4 s, capped at 10 s). After exhaustion, `RejectAndDontRequeueRecoverer` rejects
-the message; the broker routes it to the dead-letter exchange `geo.scoring.dlx` and queue `geo.scoring.queue.dlq`
-for operator inspection. The DLQ has `x-message-ttl = 7 days`, so dead-lettered messages are dropped automatically
+the message; the broker routes it to the request queue's dead-letter exchange `geo.scoring.requests.dlx` and queue
+`geo.scoring.requests.queue.dlq` for operator inspection. The DLQ has `x-message-ttl = 7 days`, so dead-lettered messages are dropped automatically
 if not triaged — bounding retention. Active monitoring on `rabbitmq.dlq.depth` is the primary signal; the TTL is
 the safety net.
 
@@ -275,7 +277,7 @@ ADR-003 §Consumer concurrency for the cross-service sizing rationale.
    codes that genuinely indicate overload (`408 Request Timeout`, `429 Too Many Requests`). Both
    `NominatimGeocodingProvider` and `LibpostalClient` translate these into a domain-typed
    `TransientGeocodingException` so the AMQP listener retry chain replays the message. On retry exhaustion
-   the message is routed to `geo.scoring.queue.dlq` for operator inspection — a sustained provider outage
+   the message is routed to `geo.scoring.requests.queue.dlq` for operator inspection — a sustained provider outage
    surfaces as DLQ depth rather than as a stream of silent `NO_RESULT` events. `AddressNormalizationService`
    is the one deliberate exception: it catches `TransientGeocodingException` from libpostal and falls back
    to the raw flattened string per ADR-012, because the free-form Nominatim query can still resolve the
@@ -290,6 +292,14 @@ script's atomicity guarantees that a mid-execution failure leaves the index in i
 safe and idempotent for the same `enrollmentId` (member uniqueness in the GEO sorted set means a retry overwrites
 rather than duplicates).
 
+**Duplicate requests are idempotent by design.** A duplicate `geo.score` command — e.g. a partial-publish redelivery
+from the decision engine — is cheap and safe without an explicit dedup guard: (1) the address-keyed geocoding cache
+turns the repeat into a cache hit, so no Nominatim call; (2) `GEOADD` re-indexes the same `enrollmentId` member,
+updating its position without double-counting density; and (3) the resulting duplicate `GeoScoreResult` is discarded by
+the decision engine's "already settled" idempotency guard (ADR-015). Note there is no inbound dedup check in
+geo-scoring — this safety is an emergent property of those three behaviours, not a single guard, which is worth knowing
+before changing any one of them.
+
 **Outbound (publisher side, `GeoScoreResultPublisher`).** The RabbitTemplate is configured with publisher confirms
 (`publisher-confirm-type: correlated`) and mandatory publishing with a returns callback. A nack or an unroutable
 return surfaces as a publish failure that the listener re-throws, triggering the same retry chain. Both failure
@@ -300,8 +310,8 @@ modes increment the `geo_scoring_publish_failures_total` counter (tagged `reason
 | Signal | Source | Notes |
 |---|---|---|
 | `geo_scoring_publish_failures_total{reason=nack\|returned}` | `AmqpConfig` counters | Publisher-side broker failures. Alert on non-zero. |
-| `rabbitmq.dlq.depth{queue=geo.scoring.queue.dlq}` | `AmqpConfig` gauge | DLQ backlog. Steady-state should be zero. |
-| `enrollmentId` MDC key | `EnrollmentAcceptedListener` | Set on entry, cleared in `finally`. Carried into all SLF4J log lines emitted while handling the event. |
+| `rabbitmq.dlq.depth{queue=geo.scoring.requests.queue.dlq}` | `AmqpConfig` gauge | DLQ backlog. Steady-state should be zero. |
+| `enrollmentId` MDC key | `GeoScoreRequestListener` | Set on entry, cleared in `finally`. Carried into all SLF4J log lines emitted while handling the command. |
 | `Density check key=… neighborCounts=… triggered=… truncated=…` | `GeoIndexService.checkAndIndex` | One INFO line per evaluated address. |
 | `Geocoding cache hit key=…` / `miss — resolving via provider address=…` | `GeocodingCacheService` / `GeocodingService` | Per-lookup cache outcome. |
 | `Geo-index cleanup complete totalRemoved=…` | `GeoIndexCleanupJob.cleanup` | One INFO line per scheduled run. Silence = job stopped. |
