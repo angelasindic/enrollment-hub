@@ -38,6 +38,37 @@ class EventSerializationTest {
 
     private static final Instant FIXED_CREATED_AT = Instant.parse("2026-05-23T10:00:00Z");
 
+    // ── Check request commands ────────────────────────────────────────────────
+
+    @Test
+    void geoScoreRequest_roundTrip() throws Exception {
+        var original = new GeoScoreRequest(UUID.randomUUID(), address("DE"));
+        var json = mapper.writeValueAsString(original);
+        var deserialized = mapper.readValue(json, GeoScoreRequest.class);
+        assertEquals(original, deserialized);
+    }
+
+    @Test
+    void geoScoreRequest_nullShippingAddress_throws() {
+        assertThrows(NullPointerException.class,
+                () -> new GeoScoreRequest(UUID.randomUUID(), null));
+    }
+
+    @Test
+    void fraudCheckRequest_roundTrip_exposesEnrollmentId() throws Exception {
+        var data = enrollmentData(PaymentType.CREDIT_CARD);
+        var original = new FraudCheckRequest(data);
+        var json = mapper.writeValueAsString(original);
+        var deserialized = mapper.readValue(json, FraudCheckRequest.class);
+        assertEquals(original, deserialized);
+        assertEquals(data.enrollmentId(), deserialized.enrollmentId());
+    }
+
+    @Test
+    void fraudCheckRequest_nullData_throws() {
+        assertThrows(NullPointerException.class, () -> new FraudCheckRequest(null));
+    }
+
     // ── EnrollmentEvent ───────────────────────────────────────────────────────
 
     @Test

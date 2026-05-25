@@ -1,6 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.amqp;
 
-import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.service.UnknownCorrelationException;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -32,22 +31,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AMQP publisher configuration for the decision-engine.
+ * AMQP topology and publisher configuration for the decision-engine.
  *
- * <h2>Routing topology (ADR-003)</h2>
- * The decision-engine publishes {@code EnrollmentAccepted} to a shared topic
- * exchange ({@link #EXCHANGE} = {@code enrollment.events}) with the routing key derived from the payment type:
- * <ul>
- *   <li>{@link PaymentType#CREDIT_CARD} → {@link #ROUTING_KEY_CREDIT_CARD}</li>
- *   <li>{@link PaymentType#INVOICE}     → {@link #ROUTING_KEY_INVOICE}</li>
- * </ul>
- * The mapping is centralised in {@link #routingKeyFor(PaymentType)}.
- *
- * <h2>Consumer-owned bindings (ADR-003 §Consumer-owned bindings)</h2>
- * The decision-engine <b>does not</b> declare consumer queues or bindings. Each
- * worker service owns its queue and binds it to the shared exchange.
- * Adding a new worker means declaring a queue + binding in that worker's AMQP
- * config. No decision-engine change is required — the topic exchange is the router.
+ * <h2>Per-signal scatter-gather (ADR-003 §Layer 2)</h2>
+ * The decision-engine dispatches one command per applicable signal to the
+ * {@link #CHECK_REQUEST_EXCHANGE} direct exchange (routing key = signal name, e.g.
+ * {@link #GEO_SCORE_KEY} / {@link #FRAUD_CHECK_KEY}) and gathers replies from the
+ * {@link #CHECK_RESULT_EXCHANGE}. It owns both exchanges and the per-signal request and result
+ * queues (declared in {@link #checkChannelTopology()}); worker services attach a listener to a
+ * request queue by name without redeclaring it.
  */
 @Slf4j
 @Configuration
@@ -56,15 +48,11 @@ public class AmqpConfig {
 
 
     public static final String ENROLLMENT_INTAKE_EXCHANGE         = "enrollment.intake";
-    public static final String ENROLLMENT_INTAKE_ROUTING_KEY     = "enrollment.request";
+    public static final String ENROLLMENT_INTAKE_ROUTING_KEY     = "enrollment.intake";
     public static final String ENROLLMENT_INTAKE_QUEUE            = "enrollment.intake.queue";
     static final String ENROLLMENT_INTAKE_DLX         = "enrollment.intake.dlx";
     static final String ENROLLMENT_INTAKE_DLQ         = "enrollment.intake.queue.dlq";
     static final String ENROLLMENT_INTAKE_DLQ_RK      = "enrollment.intake.dead-letter";
-
-    public static final String EXCHANGE                = "enrollment.events";
-    public static final String ROUTING_KEY_CREDIT_CARD = "enrollment.created.credit_card";
-    public static final String ROUTING_KEY_INVOICE     = "enrollment.created.invoice";
 
     // --- Outbound decisions topology (ADR-003 §Layer 3) ---
 
@@ -72,14 +60,6 @@ public class AmqpConfig {
     public static final String DECISION_ROUTING_KEY = "enrollment.decision.completed";
 
     static final String PUBLISH_FAILURE_METRIC = "decisionengine_publish_failures_total";
-
-    // --- Geo-score result consumer topology ---
-
-    static final String GEO_SCORE_QUEUE       = "decision-engine.geo-score.queue";
-    static final String GEO_SCORE_ROUTING_KEY = "geo.score.completed";
-    static final String GEO_SCORE_DLX         = "decision-engine.geo-score.dlx";
-    static final String GEO_SCORE_DLQ         = "decision-engine.geo-score.queue.dlq";
-    static final String GEO_SCORE_DLQ_RK      = "decision-engine.geo-score.dead-letter";
 
     // --- Per-signal scatter-gather topology (ADR-003 §Layer 2) ---
     // Two direct exchanges, owned by the decision-engine: requests out, results back.
@@ -96,19 +76,12 @@ public class AmqpConfig {
     static final String FRAUD_CHECK_REQUEST_QUEUE = "fraud.detection.requests.queue";
     static final String GEO_SCORE_RESULT_QUEUE    = "decision-engine.geo-score.results.queue";
     static final String FRAUD_CHECK_RESULT_QUEUE  = "decision-engine.fraud-check.results.queue";
+    static final String GEO_SCORE_RESULT_DLQ      = GEO_SCORE_RESULT_QUEUE + ".dlq";
 
     private static final int    MAX_RETRIES      = 3;
     private static final long   INITIAL_INTERVAL = 1_000L;
     private static final double MULTIPLIER       = 2.0;
     private static final long   MAX_INTERVAL     = 10_000L;
-
-    /** Maps a {@link PaymentType} to its canonical routing key on {@link #EXCHANGE}. */
-    static String routingKeyFor(PaymentType paymentType) {
-        return switch (paymentType) {
-            case CREDIT_CARD -> ROUTING_KEY_CREDIT_CARD;
-            case INVOICE     -> ROUTING_KEY_INVOICE;
-        };
-    }
 
     @Bean
     DirectExchange intakeExchange() {
@@ -140,23 +113,12 @@ public class AmqpConfig {
 
     /**
      * Point-to-point binding: every intake publish lands on the single intake queue.
-     * Payment-type differentiation is the concern of Layer 2 ({@link #EXCHANGE});
+     * Payment-type differentiation is the concern of Layer 2 (the check request exchange);
      * the intake exchange only needs to route durably to one queue.
      */
     @Bean
     Binding intakeBinding(Queue intakeQueue, DirectExchange intakeExchange) {
         return BindingBuilder.bind(intakeQueue).to(intakeExchange).with(ENROLLMENT_INTAKE_ROUTING_KEY);
-    }
-
-    /**
-     * Durable topic exchange for the internal scatter-gather pipeline (ADR-003 §Layer 2).
-     * Carries {@code EnrollmentAccepted} (intake-fan-out → signal workers) and signal-result
-     * events ({@code GeoScoreResult}, {@code FraudCheckResult}). Declared idempotently at startup.
-     * {@code EnrollmentDecisionEvent} does NOT flow on this exchange — see {@link #enrollmentDecisionsExchange()}.
-     */
-    @Bean
-    TopicExchange enrollmentExchange() {
-        return ExchangeBuilder.topicExchange(EXCHANGE).durable(true).build();
     }
 
     /**
@@ -234,36 +196,6 @@ public class AmqpConfig {
         });
 
         return template;
-    }
-
-    // --- Geo-score result consumer beans ---
-
-    @Bean
-    Queue geoScoreQueue() {
-        return QueueBuilder.durable(GEO_SCORE_QUEUE)
-                .deadLetterExchange(GEO_SCORE_DLX)
-                .deadLetterRoutingKey(GEO_SCORE_DLQ_RK)
-                .build();
-    }
-
-    @Bean
-    DirectExchange geoScoreDlx() {
-        return new DirectExchange(GEO_SCORE_DLX, true, false);
-    }
-
-    @Bean
-    Queue geoScoreDlq() {
-        return QueueBuilder.durable(GEO_SCORE_DLQ).build();
-    }
-
-    @Bean
-    Binding geoScoreDlqBinding(Queue geoScoreDlq, DirectExchange geoScoreDlx) {
-        return BindingBuilder.bind(geoScoreDlq).to(geoScoreDlx).with(GEO_SCORE_DLQ_RK);
-    }
-
-    @Bean
-    Binding geoScoreBinding(Queue geoScoreQueue, TopicExchange enrollmentExchange) {
-        return BindingBuilder.bind(geoScoreQueue).to(enrollmentExchange).with(GEO_SCORE_ROUTING_KEY);
     }
 
     // --- Per-signal scatter-gather topology beans (ADR-003 §Layer 2) ---

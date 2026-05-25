@@ -246,9 +246,8 @@ Geo-scoring participates in the pipeline's at-least-once + idempotent-consumer m
 normally. On exception, the stateless retry interceptor configured in `AmqpConfig` retries up to 3 times with
 exponential backoff (1 s → 2 s → 4 s, capped at 10 s). After exhaustion, `RejectAndDontRequeueRecoverer` rejects
 the message; the broker routes it to the request queue's dead-letter exchange `geo.scoring.requests.dlx` and queue
-`geo.scoring.requests.queue.dlq` for operator inspection. The DLQ has `x-message-ttl = 7 days`, so dead-lettered messages are dropped automatically
-if not triaged — bounding retention. Active monitoring on `rabbitmq.dlq.depth` is the primary signal; the TTL is
-the safety net.
+`geo.scoring.requests.queue.dlq` for operator inspection. The request queue and its dead-letter queue are owned by the
+decision-engine (ADR-003 §Channel ownership); active monitoring on `rabbitmq.dlq.depth` is the primary signal.
 
 #### Listener Concurrency
 

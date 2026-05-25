@@ -85,8 +85,8 @@ global `spring.threads.virtual.enabled=true` is planned but not yet set.
 The core pipeline is implemented. Several items are planned but not yet built.
 
 **Implemented:**
-- RabbitMQ scatter-gather topology (`enrollment.events` topic exchange, geo-score result queue with DLQ)
-- Durable intake queue (`enrollment.intake`, ADR-003 Layer 1) — `EnrollmentIntakeService` consumes and publishes `EnrollmentAccepted` post-commit
+- RabbitMQ per-signal scatter-gather topology (`enrollment.check.request` / `enrollment.check.result` direct exchanges; decision-engine-owned request and result queues with DLQs)
+- Durable intake queue (`enrollment.intake`, ADR-003 Layer 1) — `EnrollmentIntakeService` consumes and dispatches one per-signal command (`geo.score` / `fraud.check`) per applicable signal post-commit
 - Durable correlation record (PostgreSQL, JSONB signal map, `SELECT FOR UPDATE` concurrency guard)
 - Decision Engine with ADR-016 signal classification model (BEST_EFFORT + SCORING_SIGNAL aggregation)
 - Complete Geo-Scoring module (libpostal normalisation, Nominatim geocoding, atomic Redis Lua density check)
@@ -97,7 +97,7 @@ The core pipeline is implemented. Several items are planned but not yet built.
 **Not yet implemented:**
 - Timeout poller (ADR-010) — `findPendingTimeouts()` query exists; `@Scheduled` job not wired
 - Decision-engine as OAuth2 resource server + prerequisite token validation (ADR-007) — dependency commented out
-- Fraud check result listener — `FRAUD_CHECK` signal exists in correlation record but no AMQP listener consumes `FraudCheckResult`
+- Fraud-detection worker — the decision-engine dispatches `fraud.check` commands (accumulating on `fraud.detection.requests.queue`) and a fraud-result queue is declared, but no worker consumes the request or produces `FraudCheckResult` yet; `FRAUD_CHECK` fails open via the timeout path until then
 - Account Service consumer — `EnrollmentDecisionEvent` is published but no downstream consumer is implemented
 
 ---
@@ -108,7 +108,7 @@ The core pipeline is implemented. Several items are planned but not yet built.
 |-----------------------|-------------------------------------------------------------------------|
 | Runtime               | JDK 25, virtual threads                                                 |
 | Framework             | Spring Boot 4.x, Spring AMQP                                            |
-| Messaging             | RabbitMQ — topic exchange, scatter-gather topology                      |
+| Messaging             | RabbitMQ — direct exchanges, per-signal scatter-gather topology         |
 | Persistence           | PostgreSQL — correlation record with JSONB signal map                   |
 | Geo index             | Redis — atomic Lua GEOSEARCH + GEOADD, 48-hour per-member TTL          |
 | Geocoding             | Nominatim (self-hosted)                                                 |

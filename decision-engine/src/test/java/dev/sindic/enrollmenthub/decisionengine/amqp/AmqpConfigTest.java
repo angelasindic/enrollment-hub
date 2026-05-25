@@ -1,6 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.amqp;
 
-import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.service.UnknownCorrelationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpException;
@@ -13,18 +12,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AmqpConfigTest {
-
-    @Test
-    void routingKeyForCreditCard() {
-        assertThat(AmqpConfig.routingKeyFor(PaymentType.CREDIT_CARD))
-                .isEqualTo("enrollment.created.credit_card");
-    }
-
-    @Test
-    void routingKeyForInvoice() {
-        assertThat(AmqpConfig.routingKeyFor(PaymentType.INVOICE))
-                .isEqualTo("enrollment.created.invoice");
-    }
 
     @Test
     void listenerRetryPolicy_doesNotRetryUnknownCorrelation() {

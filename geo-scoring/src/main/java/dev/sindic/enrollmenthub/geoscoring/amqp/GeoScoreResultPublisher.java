@@ -8,8 +8,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Publishes {@link GeoScoreResult} events to the {@code enrollment.events}
- * topic exchange with routing key {@link AmqpConfig#RESULT_ROUTING_KEY}.
+ * Publishes {@link GeoScoreResult} events to the {@code enrollment.check.result}
+ * direct exchange with routing key {@link AmqpConfig#RESULT_ROUTING_KEY}.
  *
  * <p>Uses the channel-scoped {@code invoke + waitForConfirmsOrDie} pattern so
  * three failure modes all surface as exceptions to the caller:
@@ -38,7 +38,7 @@ public class GeoScoreResultPublisher {
         var correlation = new CorrelationData(event.enrollmentId().toString());
 
         rabbitTemplate.invoke(ops -> {
-            ops.convertAndSend(AmqpConfig.EXCHANGE, AmqpConfig.RESULT_ROUTING_KEY, event, correlation);
+            ops.convertAndSend(AmqpConfig.RESULT_EXCHANGE, AmqpConfig.RESULT_ROUTING_KEY, event, correlation);
             ops.waitForConfirmsOrDie(confirmTimeoutMillis);
             return Boolean.TRUE;
         });

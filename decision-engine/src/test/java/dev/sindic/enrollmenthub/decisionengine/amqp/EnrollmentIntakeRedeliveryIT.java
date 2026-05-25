@@ -5,6 +5,7 @@ import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
 import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
+import dev.sindic.enrollmenthub.contracts.events.GeoScoreRequest;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -13,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.QueueBuilder;
-import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,7 +56,6 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
     @Autowired RabbitTemplate rabbitTemplate;
     @Autowired RabbitAdmin rabbitAdmin;
     @Autowired JdbcTemplate jdbc;
-    @Autowired @Qualifier("enrollmentExchange") TopicExchange enrollmentExchange;
     @Autowired @Qualifier("intakeExchange") DirectExchange intakeExchange;
 
     @BeforeEach
@@ -74,7 +73,7 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
         var queue = QueueBuilder.nonDurable(EVENTS_CAPTURE_QUEUE).build();
         rabbitAdmin.declareQueue(queue);
         rabbitAdmin.declareBinding(BindingBuilder.bind(queue)
-                .to(enrollmentExchange).with(AmqpConfig.ROUTING_KEY_CREDIT_CARD));
+                .to(new DirectExchange(AmqpConfig.CHECK_REQUEST_EXCHANGE)).with(AmqpConfig.GEO_SCORE_KEY));
     }
 
     @AfterEach
@@ -133,12 +132,12 @@ class EnrollmentIntakeRedeliveryIT extends BaseIntegrationTest {
         // save though). Asserting "at least one" keeps the test deterministic
         // without over-specifying the timing.
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
-            EnrollmentEvent received = (EnrollmentEvent) rabbitTemplate.receiveAndConvert(
+            GeoScoreRequest received = (GeoScoreRequest) rabbitTemplate.receiveAndConvert(
                     EVENTS_CAPTURE_QUEUE, 100);
             assertThat(received)
-                    .as("at-least-once delivery: downstream must see the event")
+                    .as("at-least-once delivery: downstream must see the dispatched command")
                     .isNotNull();
-            assertThat(received.enrollmentId()).isEqualTo(enrollmentId.toString());
+            assertThat(received.enrollmentId()).isEqualTo(enrollmentId);
         });
     }
 
