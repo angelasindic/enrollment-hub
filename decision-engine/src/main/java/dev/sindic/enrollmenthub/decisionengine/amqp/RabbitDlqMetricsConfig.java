@@ -20,9 +20,23 @@ public class RabbitDlqMetricsConfig {
                     "Messages waiting in the dead-letter queue from the decision-engine: " +
                             AmqpConfig.GEO_SCORE_RESULT_DLQ),
             new DlqGaugeDef("rabbitmq.dlq.depth",
+                    AmqpConfig.FRAUD_CHECK_RESULT_DLQ,
+                    "Messages waiting in the dead-letter queue from the decision-engine: " +
+                            AmqpConfig.FRAUD_CHECK_RESULT_DLQ),
+            new DlqGaugeDef("rabbitmq.dlq.depth",
                     AmqpConfig.ENROLLMENT_INTAKE_DLQ,
                     "Messages waiting in the dead-letter queue from the decision-engine: " +
-                            AmqpConfig.ENROLLMENT_INTAKE_DLQ)
+                            AmqpConfig.ENROLLMENT_INTAKE_DLQ),
+            // Request-queue DLQs: declared and owned by the decision-engine (ADR-003 §Channel
+            // ownership), so it reports their depth centrally — the worker modules also gauge them.
+            new DlqGaugeDef("rabbitmq.dlq.depth",
+                    AmqpConfig.GEO_SCORE_REQUEST_DLQ,
+                    "Messages waiting in the dead-letter queue from the decision-engine: " +
+                            AmqpConfig.GEO_SCORE_REQUEST_DLQ),
+            new DlqGaugeDef("rabbitmq.dlq.depth",
+                    AmqpConfig.FRAUD_CHECK_REQUEST_DLQ,
+                    "Messages waiting in the dead-letter queue from the decision-engine: " +
+                            AmqpConfig.FRAUD_CHECK_REQUEST_DLQ)
     );
 
     @Bean

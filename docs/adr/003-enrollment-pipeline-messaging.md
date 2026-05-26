@@ -159,13 +159,33 @@ least-privilege payload — geo-scoring receives only the shipping address, frau
 record. The signal-name key reused across both exchanges is unambiguous because direction is encoded by the exchange,
 not the key.
 
-**Channel ownership.** Each party owns the channels it *initiates*. The decision engine owns the request exchange and the per-signal request queues (with their DLX/DLQ),
-because it is the command sender and because the request queue must exist before its worker is deployed — otherwise a
-`mandatory` publish would return as unroutable. Workers attach a `@RabbitListener` to the request queue by name and do
-**not** redeclare it (declaring on both sides risks argument conflicts; Spring AMQP consumes an existing queue without
-declaring it). Conversely, the decision engine owns its result queues, since it is the consumer there. Adding a new
-check is therefore a localized decision-engine change — `SignalConfig` entry, request builder, request queue + binding,
-result listener — plus deploying the worker as a pure listener.
+**Channel ownership — the decision engine owns the request channel.** Each party owns the channels it *initiates*: the
+decision engine owns the request exchange and the per-signal request queues (with their DLX/DLQ); each party owns the
+result queues it consumes.
+
+This is a deliberate departure from the "a consumer declares the queue it listens on" convention, and it is well-founded:
+
+- **Command semantics, not events.** These are *Command Messages* on *Point-to-Point Channels* (request/reply), not
+  *Event Messages* on a publish-subscribe channel. With an event, the producer is intentionally ignorant of consumers,
+  so consumer-owned queues fit. With a command, the sender targets a known handler — so the sender owning (and
+  provisioning) the request channel is the natural ownership model, and the standard one for request/reply.
+- **The "consumer declares its queue" rule is a convenience default, not a law.** In production, broker topology is
+  very commonly declared centrally — by infrastructure-as-code (e.g. a Terraform RabbitMQ provider or a
+  `definitions.json` loaded at broker boot) or by a dedicated topology owner — so that *no* application declares its own
+  queue at runtime. Having the decision engine own the request side is a lighter-weight form of that same
+  topology-owner pattern; at larger scale this would move to IaC-provisioned topology.
+- **Decoupled deployment.** Because the decision engine declares the request queue, it can dispatch a command
+  (`mandatory` publish) for a signal whose worker is not deployed yet — the command simply accumulates on the queue
+  rather than returning unroutable. A consumer-owned queue could not exist before the worker.
+
+Consequences for the worker: it attaches a `@RabbitListener` to the request queue *by name* and does **not** redeclare
+it (declaring on both sides risks argument conflicts; Spring AMQP consumes an existing queue without declaring it). And
+because the queue may not exist when the worker starts (it starts before the decision engine, or in isolation under
+test), the worker's listener container sets `missingQueuesFatal=false` so it retries declaration instead of failing
+fatally — correct distributed-startup behaviour, not a workaround.
+
+Adding a new check is therefore a localized decision-engine change — `SignalConfig` entry, request builder, request
+queue + binding, result listener — plus deploying the worker as a pure listener.
 
 #### Layer 3 — Outbound: `enrollment.decisions`
 
@@ -184,15 +204,14 @@ dead-letter queue, `<service>.dlx` for its DLX. All entries below are durable.
 |-----------------------------------------------|---------------------------------------------|---------------------------------------------------|------------------------------------------------|
 | `enrollment.intake.queue`                     | `enrollment.intake.dlx`                     | `enrollment.intake.queue.dlq`                     | decision-engine                                |
 | `geo.scoring.requests.queue`                  | `geo.scoring.requests.dlx`                  | `geo.scoring.requests.queue.dlq`                  | decision-engine (consumed by geo-scoring)      |
-| `fraud.detection.requests.queue` †            | `fraud.detection.requests.dlx` †            | `fraud.detection.requests.queue.dlq` †            | decision-engine (consumed by fraud-detection †)|
+| `fraud.detection.requests.queue`              | `fraud.detection.requests.dlx`              | `fraud.detection.requests.queue.dlq`              | decision-engine (consumed by fraud-detection)  |
 | `decision-engine.geo-score.results.queue`     | `decision-engine.geo-score.results.dlx`     | `decision-engine.geo-score.results.queue.dlq`     | decision-engine                                |
-| `decision-engine.fraud-check.results.queue` † | `decision-engine.fraud-check.results.dlx` † | `decision-engine.fraud-check.results.queue.dlq` † | decision-engine †                              |
+| `decision-engine.fraud-check.results.queue`   | `decision-engine.fraud-check.results.dlx`   | `decision-engine.fraud-check.results.queue.dlq`   | decision-engine                                |
 | `account-service.decisions.queue`             | (owned by account-service)                  | (owned by account-service)                        | account-service *(out of scope)*               |
 
-† **Not yet implemented.** Internal Fraud Detection has no worker yet. The decision engine declares
-`fraud.detection.requests.queue` so it can dispatch `fraud.check` commands that simply accumulate until a consumer
-attaches (the `FRAUD_CHECK` signal fail-opens via the timeout poller in the interim — ADR-010), plus the fraud-result
-listener queue. The fraud worker is built as the final step of the topology rollout and attaches as a pure listener.
+Internal Fraud Detection runs as a stub (approves unconditionally with `SignalOutcome.OK`); its real signal set is an
+open decision (architecture.md §10.1). The wiring is complete: the fraud worker consumes `fraud.detection.requests.queue`
+and replies on `enrollment.check.result`, which the decision-engine's fraud-result listener records.
 
 ---
 

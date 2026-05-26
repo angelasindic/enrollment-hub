@@ -18,6 +18,7 @@
 	<modules>
 		<module>contracts</module>
 		<module>geo-scoring</module>
+		<module>fraud-detection</module>
 		<module>decision-engine</module>
 	</modules>
 

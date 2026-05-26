@@ -96,10 +96,11 @@ does not subscribe to RabbitMQ events. Identity is not represented as a signal i
 correlation record's signal map — prerequisites are outside the ADR-016 signal
 classification model.
 
-Internal Fraud Detection has no worker yet: the decision engine dispatches `fraud.check` commands to
-`fraud.detection.requests.queue`, where they accumulate until the fraud worker is deployed as a pure listener. Until
-then `FRAUD_CHECK` settles via the timeout poller's fail-open path (ADR-010). The `FRAUD_CHECK` signal is initialised to
-`PENDING` on both routes.
+Internal Fraud Detection runs as a stub: the decision engine dispatches `fraud.check` commands to
+`fraud.detection.requests.queue`; the fraud worker consumes them, approves unconditionally
+(`SignalOutcome.OK`), and replies on `enrollment.check.result`, which `FraudCheckResultListener` records against the
+`FRAUD_CHECK` signal. The `FRAUD_CHECK` signal is initialised to `PENDING` on both routes; a real fraud service replaces
+the stub with no decision-engine changes.
 
 ### Correlation Record
 
