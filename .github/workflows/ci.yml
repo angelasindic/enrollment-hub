@@ -21,7 +21,6 @@ jobs:
       build-all: ${{ steps.resolve.outputs.build-all }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -44,6 +43,16 @@ jobs:
           FILTER_FRAUD_DETECTION: ${{ steps.filter.outputs.fraud-detection }}
           FILTER_DECISION_ENGINE: ${{ steps.filter.outputs.decision-engine }}
         run: npx tsx .github/scripts/resolve-modules.ts
+      - name: Debug filter outputs
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Filter contracts: ${{ steps.filter.outputs.contracts }}"
+          echo "Filter geo-scoring: ${{ steps.filter.outputs.geo-scoring }}"
+          echo "Filter fraud-detection: ${{ steps.filter.outputs.fraud-detection }}"
+          echo "Filter decision-engine: ${{ steps.filter.outputs.decision-engine }}"
+          echo "Resolved list: ${{ steps.resolve.outputs.list }}"
+          echo "Resolved modules: ${{ steps.resolve.outputs.modules }}"
+          echo "Resolved build-all: ${{ steps.resolve.outputs.build-all }}"
 
   build:
     needs: changes
