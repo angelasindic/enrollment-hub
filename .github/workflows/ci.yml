@@ -17,9 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       list: ${{ steps.resolve.outputs.list }}
+      modules: ${{ steps.resolve.outputs.modules }}
+      build-all: ${{ steps.resolve.outputs.build-all }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -33,21 +36,14 @@ jobs:
             decision-engine:
               - 'decision-engine/**'
 
-      - name: Resolve modules to build
+      - name: Resolve modules
         id: resolve
-        run: |
-          # workflow_dispatch has no diff base, and a contracts/root-pom change affects every
-          # module — build the whole reactor in both cases.
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" || \
-                "${{ steps.filter.outputs.contracts }}" == "true" ]]; then
-            echo "list=contracts,geo-scoring,fraud-detection,decision-engine" >> "$GITHUB_OUTPUT"
-          else
-            MODS=""
-            [[ "${{ steps.filter.outputs.geo-scoring }}" == "true" ]] && MODS="$MODS,geo-scoring"
-            [[ "${{ steps.filter.outputs.fraud-detection }}" == "true" ]] && MODS="$MODS,fraud-detection"
-            [[ "${{ steps.filter.outputs.decision-engine }}" == "true" ]] && MODS="$MODS,decision-engine"
-            echo "list=${MODS#,}" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          FILTER_CONTRACTS: ${{ steps.filter.outputs.contracts }}
+          FILTER_GEO_SCORING: ${{ steps.filter.outputs.geo-scoring }}
+          FILTER_FRAUD_DETECTION: ${{ steps.filter.outputs.fraud-detection }}
+          FILTER_DECISION_ENGINE: ${{ steps.filter.outputs.decision-engine }}
+        run: npx tsx .github/scripts/resolve-modules.ts
 
   build:
     needs: changes
