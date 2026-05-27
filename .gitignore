@@ -38,6 +38,9 @@ docs/structurizr/workspace.json
 docs/structurizr/.structurizr/
 
 
+### github scripts
+.github/node_modules/
+
 ### local stuff ###
 notes/
 
