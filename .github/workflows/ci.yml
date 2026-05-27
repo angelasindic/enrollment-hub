@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  checks: write        # post test annotations
 
 jobs:
   changes:
@@ -21,6 +22,13 @@ jobs:
       build-all: ${{ steps.resolve.outputs.build-all }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.github/.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: .github/package-lock.json
+      - name: Install CI script dependencies
+        run: npm ci --prefix .github
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -42,7 +50,7 @@ jobs:
           FILTER_GEO_SCORING: ${{ steps.filter.outputs.geo-scoring }}
           FILTER_FRAUD_DETECTION: ${{ steps.filter.outputs.fraud-detection }}
           FILTER_DECISION_ENGINE: ${{ steps.filter.outputs.decision-engine }}
-        run: npx tsx .github/scripts/resolve-modules.ts
+        run: .github/node_modules/.bin/tsx .github/scripts/resolve-modules.ts
       - name: Debug filter outputs
         run: |
           echo "Event: ${{ github.event_name }}"
@@ -54,48 +62,39 @@ jobs:
           echo "Resolved modules: ${{ steps.resolve.outputs.modules }}"
           echo "Resolved build-all: ${{ steps.resolve.outputs.build-all }}"
 
-  build:
+  build-test:
     needs: changes
     if: needs.changes.outputs.list != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up JDK 25
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '25'
           cache: maven
 
-      - name: Build & unit-test changed modules
+      - name: Build, unit test, and install
         run: |
-          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am verify -DskipITs --batch-mode --no-transfer-progress
+          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am install -DskipITs --batch-mode --no-transfer-progress
 
-  integration-tests:
-    needs: [ changes, build ]
-    if: needs.changes.outputs.list != ''
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 25
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
-
-      # Install the changed modules and their upstream dependencies (no tests) so the failsafe
-      # goals below resolve them from the local repo and run against the compiled test classes.
-      - name: Build dependencies
-        run: |
-          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am install -DskipTests --batch-mode --no-transfer-progress
-
-      # Run integration tests for the changed modules ONLY (no -am), via the failsafe goals
-      # directly so surefire unit tests are not re-run (they ran in the build job). This also keeps
-      # an upstream module's ITs (e.g. geo-scoring's Nominatim container) from re-running when only
-      # a downstream module changed. Testcontainers uses the Docker daemon preinstalled on the runner.
-      - name: Integration tests (changed modules)
+      - name: Integration tests
         run: |
           ./mvnw -pl "${{ needs.changes.outputs.list }}" failsafe:integration-test failsafe:verify --batch-mode --no-transfer-progress
+
+      # ── Test Reports ─────────────────────────────────────────────
+      - name: Publish unit test report
+        uses: dorny/test-reporter@v1
+        if: success() || failure()    # run even if tests fail
+        with:
+          name: Unit Tests
+          path: '*/target/surefire-reports/TEST-*.xml'
+          reporter: java-junit
+
+      - name: Publish integration test report
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Integration Tests
+          path: '*/target/failsafe-reports/TEST-*.xml'
+          reporter: java-junit

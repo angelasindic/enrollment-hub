@@ -156,8 +156,8 @@ density score for each subsequent attempt. Accounts rejected at the prerequisite
 geo-scoring and are not indexed; they carry no verified address worth recording.
 
 **Country resolution:** `country_code` is a mandatory field in the account creation request payload, validated by the
-orchestrator before the `geo.score` command is dispatched. A missing or unrecognised country code is rejected at entry (§6.2
-prerequisite rejection path) and never reaches the geo-scoring service. The `{country}` partition key is therefore
+orchestrator before the `geo.score` command is dispatched. A missing or unrecognised country code is rejected at entry 
+(§6.2 prerequisite rejection path) and never reaches the geo-scoring service. The `{country}` partition key is therefore
 always well-defined when the Lua script executes.
 
 **Step 4 — Risk Level Mapping**
