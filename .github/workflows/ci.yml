@@ -81,7 +81,7 @@ jobs:
         if: success() || failure()    # run even if tests fail
         with:
           name: Unit Tests
-          path: '*/target/surefire-reports/*.xml'
+          path: '*/target/surefire-reports/TEST-*.xml'
           reporter: java-junit
 
       - name: Publish integration test report
@@ -89,5 +89,5 @@ jobs:
         if: success() || failure()
         with:
           name: Integration Tests
-          path: '*/target/failsafe-reports/*.xml'
+          path: '*/target/failsafe-reports/TEST-*.xml'
           reporter: java-junit
