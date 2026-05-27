@@ -1,6 +1,6 @@
 /**
  * Resolves which Maven modules need to build based on paths-filter outputs.
- * Writes GitHub step outputs: list, modules (JSON array), build-all.
+ * Writes GitHub step output: list (comma-separated module names).
  */
 
 import * as fs from 'fs';
@@ -20,31 +20,19 @@ const eventName  = process.env.GITHUB_EVENT_NAME ?? 'push';
 const allModules = ['contracts', 'geo-scoring', 'fraud-detection', 'decision-engine'] as const;
 
 let changed: string[];
-let buildAll: boolean;
 
 if (eventName === 'workflow_dispatch' || filterContracts) {
-  changed  = [...allModules];
-  buildAll = true;
+  changed = [...allModules];
 } else {
   changed  = [];
   if (filterGeo)      changed.push('geo-scoring');
   if (filterFraud)    changed.push('fraud-detection');
   if (filterDecision) changed.push('decision-engine');
-  buildAll = false;
 }
 
-const list        = changed.join(',');
-const modulesJson = JSON.stringify(changed);
+const list = changed.join(',');
 
-// GitHub Actions expects key=value lines appended to GITHUB_OUTPUT
-const lines = [
-  `list=${list}`,
-  `modules=${modulesJson}`,
-  `build-all=${buildAll}`,
-];
-
-fs.appendFileSync(outputPath, lines.join('\n') + '\n');
+fs.appendFileSync(outputPath, `list=${list}\n`);
 
 console.log(`Event: ${eventName}`);
-console.log(`Build all: ${buildAll}`);
 console.log(`Modules: ${list}`);

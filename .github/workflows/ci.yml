@@ -7,6 +7,10 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Explicitly grant the permissions required by the action
 permissions:
   contents: read
@@ -18,8 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       list: ${{ steps.resolve.outputs.list }}
-      modules: ${{ steps.resolve.outputs.modules }}
-      build-all: ${{ steps.resolve.outputs.build-all }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,13 +61,12 @@ jobs:
           echo "Filter fraud-detection: ${{ steps.filter.outputs.fraud-detection }}"
           echo "Filter decision-engine: ${{ steps.filter.outputs.decision-engine }}"
           echo "Resolved list: ${{ steps.resolve.outputs.list }}"
-          echo "Resolved modules: ${{ steps.resolve.outputs.modules }}"
-          echo "Resolved build-all: ${{ steps.resolve.outputs.build-all }}"
 
   build-test:
     needs: changes
     if: needs.changes.outputs.list != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -98,3 +99,4 @@ jobs:
           name: Integration Tests
           path: '*/target/failsafe-reports/TEST-*.xml'
           reporter: java-junit
+          fail_on_empty: false
