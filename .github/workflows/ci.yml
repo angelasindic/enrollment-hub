@@ -24,7 +24,7 @@ jobs:
       list: ${{ steps.resolve.outputs.list }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: '.github/.nvmrc'
           cache: 'npm'
