@@ -22,7 +22,7 @@ class EventSerializationTest {
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
             .build();
 
-    // ── fixtures ──────────────────────────────────────────────────────────────
+    // fixtures
 
     private static Address address(String countryCode) {
         return new Address(List.of("123 Main St"), "10115", "Berlin", "BE", countryCode);
