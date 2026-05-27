@@ -85,7 +85,7 @@ jobs:
 
       # ── Test Reports ─────────────────────────────────────────────
       - name: Publish unit test report
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v3
         if: success() || failure()    # run even if tests fail
         with:
           name: Unit Tests
@@ -93,7 +93,7 @@ jobs:
           reporter: java-junit
 
       - name: Publish integration test report
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v3
         if: success() || failure()
         with:
           name: Integration Tests
