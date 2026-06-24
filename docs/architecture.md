@@ -23,11 +23,11 @@ background, and delivers the decision asynchronously.
 Four decisions drive this design:
 
 - Accepting a request and scoring it are separated by a durable queue, so a slow or failing downstream service never
-  reaches the applicant (ADR-003).
+  reaches the applicant (ADR-14).
 - Each fraud check runs as its own service. The decision engine dispatches the checks in parallel, gathers the results,
-  and aggregates a final decision (ADR-002).
+  and aggregates a final decision (ADR-08).
 - A slow or unresponsive check never blocks an enrollment. The system emits a decision and explicitly notes the missing
-  signal, so the gap stays traceable (ADR-010).
+  signal, so the gap stays traceable (ADR-16).
 - Requests are written to durable storage before any check begins, guaranteeing no check runs against a record that does
   not yet exist — and without a separate outbox table (§8.7).
 
@@ -83,7 +83,7 @@ The quality attributes from §1.1 resolve into concrete goals here — some meas
 | **Scoring Latency** | **Bounded latency:** P95 ≤ 2 seconds for `GeoScoreResult` events under peak load                                                                                                      |
 | **Resiliency**      | **Zero-block intake:** downstream detection failures trigger a fail-open state rather than blocking enrollment (§8.6)                                                                 | 
 | **Privacy**         | **48-hour TTL:** automatic eviction of PII and spatial data from the geo-index to minimize GDPR exposure                                                                              |
-| **Integrity**       | **Strict gatekeeping:** no enrollment is scored until its prerequisite payment and identity assertions are verified (§8.1, ADR-007)                                                   |
+| **Integrity**       | **Strict gatekeeping:** no enrollment is scored until its prerequisite payment and identity assertions are verified (§8.1, ADR-03)                                                   |
 | **Reproducibility** | **Deterministic scoring:** identical request and geo-index state always yield the same score — no ML model, no run-to-run drift — decision is replayable and auditable after the fact |
 
 ---
@@ -145,7 +145,7 @@ input.
 **Delegated trust.** The hub does not authenticate users or verify identity itself. Authentication happens at the
 gateway against the identity provider; the decision engine then admits a request to an enrollment route only if its
 token carries the scope that route requires. A valid session with the wrong scope for its route is rejected before any
-scoring begins (§8.1, ADR-007).
+scoring begins (§8.1, ADR-03).
 
 ### 2.4 Operational & Business Constraints
 
