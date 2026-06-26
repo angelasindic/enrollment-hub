@@ -23,11 +23,11 @@ background, and delivers the decision asynchronously.
 Four decisions drive this design:
 
 - Accepting a request and scoring it are separated by a durable queue, so a slow or failing downstream service never
-  reaches the applicant (ADR-14).
+  reaches the applicant (ADR-13).
 - Each fraud check runs as its own service. The decision engine dispatches the checks in parallel, gathers the results,
-  and aggregates a final decision (ADR-08).
+  and aggregates a final decision (ADR-07).
 - A slow or unresponsive check never blocks an enrollment. The system emits a decision and explicitly notes the missing
-  signal, so the gap stays traceable (ADR-16).
+  signal, so the gap stays traceable (ADR-15).
 - Requests are written to durable storage before any check begins, guaranteeing no check runs against a record that does
   not yet exist — and without a separate outbox table (§8.7).
 
@@ -103,9 +103,9 @@ The five-requests-a-second figure describes ingress volume only. Internal concur
 latency and fan-out to several checks per request, not by request rate. Where a decision would change at higher volume,
 the relevant ADR records the trigger:
 
-- Sustained load at or above 50 requests a second changes the timeout and scaling story (ADR-16).
-- At roughly ten times peak, the single Redis instance moves to cluster mode (ADR-12).
-- At or above 50 requests a second, lock contention on the correlation record needs revisiting (ADR-17).
+- Sustained load at or above 50 requests a second changes the timeout and scaling story (ADR-15).
+- At roughly ten times peak, the single Redis instance moves to cluster mode (ADR-11).
+- At or above 50 requests a second, lock contention on the correlation record needs revisiting (ADR-16).
 
 ---
 
