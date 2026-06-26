@@ -16,6 +16,7 @@
 	<packaging>pom</packaging>
 
 	<modules>
+		<module>contracts</module>
 		<module>authorization-server</module>
 		<module>gateway</module>
 	</modules>

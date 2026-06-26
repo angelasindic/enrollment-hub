@@ -208,3 +208,32 @@ using multiple legitimate instruments to build a cluster of synthetic accounts. 
 the adjacent-address scenario.
 
 ---
+## 5. Building Block View (C4 Level 2)
+
+The hub is a set of independently deployable services that communicate over RabbitMQ rather than by direct call. The
+message schemas are not redefined per service. They live in a single producer-owned library, so a contract mismatch
+surfaces as a compile error rather than a runtime deserialization failure. That library is described first, because
+every other building block depends on it. The services are specified as they are introduced.
+
+### 5.1 Contracts
+
+A shared Maven module holds every event record and shared enum that crosses a service boundary. The producer of an event
+owns its schema, and consumers depend on the library. The module is a library rather than a deployable unit, with no
+persistence and no runtime. ADR-06 records the choice of a shared module over a schema registry or per-service
+duplication, the forward-compatible evolution rules, and the conditions that would justify a registry.
+
+The catalog divides into the intake event, the per-signal scatter-gather commands and their results, and the outbound
+decision:
+
+| Event                     | Producer → Consumer               | Carries                                                                                   |
+|---------------------------|-----------------------------------|-------------------------------------------------------------------------------------------|
+| `EnrollmentEvent`         | decision-engine intake → pipeline | the submitted enrollment data                                                             |
+| `GeoScoreRequest`         | decision-engine → geo-scoring     | the shipping address only                                                                 |
+| `GeoScoreResult`          | geo-scoring → decision-engine     | a `RiskLevel`, or none with a reason when geocoding fails                                 |
+| `FraudCheckRequest`       | decision-engine → fraud-detection | the full enrollment data                                                                  |
+| `FraudCheckResult`        | fraud-detection → decision-engine | a `SignalOutcome`                                                                         |
+| `EnrollmentDecisionEvent` | decision-engine → Account Service | a fresh `decisionId`, the original request, the `DecisionResult`, and the settled signals |
+
+Payloads follow least privilege. Each check receives only the fields it needs, and the outbound decision exposes a fresh
+`decisionId` while withholding the internal correlation key. Whether a signal reports a `RiskLevel` or a `SignalOutcome`
+follows the classification in ADR-14.
