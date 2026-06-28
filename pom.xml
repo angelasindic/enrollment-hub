@@ -19,6 +19,7 @@
 		<module>contracts</module>
 		<module>authorization-server</module>
 		<module>gateway</module>
+		<module>geo-scoring</module>
 	</modules>
 
 	<properties>

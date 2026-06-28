@@ -237,3 +237,59 @@ decision:
 Payloads follow least privilege. Each check receives only the fields it needs, and the outbound decision exposes a fresh
 `decisionId` while withholding the internal correlation key. Whether a signal reports a `RiskLevel` or a `SignalOutcome`
 follows the classification in ADR-14.
+
+---
+
+### 5.2 Geo-Scoring
+
+Geo-Scoring is the non-payment signal against synthetic identity proliferation (§4). It measures how densely
+enrollments cluster around a physical address within a short window — a quantity that stays invariant when an
+adversary varies payment instruments, devices, and identities. It runs as its own service so that a geocoding
+outage degrades this one signal without stalling the pipeline, and because it carries infrastructure and a
+data-retention profile the rest of the system does not (ADR-07).
+
+It consumes a `GeoScoreRequest` and replies with a `GeoScoreResult` carrying a `RiskLevel`. The work is three
+stages, backed entirely by Redis/Valkey; it holds no relational state.
+
+- **Normalisation.** A libpostal sidecar reduces the address to a deterministic canonical form, so formatting
+  variants of the same address share one cache key. A libpostal failure falls back to the raw string rather
+  than blocking (ADR-10).
+- **Geocoding.** A self-hosted Nominatim resolves the address to coordinates, fronted by a keyed-hash cache
+  that stores no enrollment identifiers. The provider sits behind an interface and can be swapped without
+  touching the scoring logic (ADR-09).
+- **Density scoring.** A fixed-radius neighbour count at 100, 250, and 500 metres over a country-partitioned
+  Redis GEO set maps to a `RiskLevel`. Fixed concentric radii were chosen over a clustering algorithm such as
+  DBSCAN because the thresholds are operationally tunable and the count is a single bounded Redis call
+  (ADR-08). The count and the index write run as one atomic Lua script, closing the burst-timing race a
+  simultaneous fraud ring would otherwise exploit (ADR-11).
+
+Every scored enrollment is indexed regardless of outcome, and every member expires after 48 hours. The TTL is
+an architectural asset, not only a privacy control: it bounds the index to the window in which a ring is
+actionable, and unconditional indexing makes threshold probing self-defeating (ADR-12). The Redis data
+structures, the Lua scripts, and the retry and dead-letter behaviour are in the geo-scoring design document;
+the radius and threshold calibration is in the Geo-Scoring Business Analysis.
+
+---
+
+## 6. Runtime View
+
+### 6.1 Geo-Scoring: From Request to Score
+
+Geo-Scoring is a worker on the scatter-gather. The decision engine dispatches a `geo.score` command, and the
+service replies on the result channel. Processing one request is sequential:
+
+1. Normalise the shipping address through libpostal. On a libpostal failure, fall back to the raw flattened
+   address so the request still proceeds.
+2. Resolve coordinates. A hit on the keyed-hash cache returns at once; a miss calls Nominatim and caches the
+   result.
+3. Run the atomic Lua script: count neighbours within each radius, then index the new point and record its
+   insertion time for the per-member TTL. The two steps cannot interleave with another request, so concurrent
+   submissions at the same address cannot all read an empty index.
+4. Map the neighbour counts to a `RiskLevel` and publish a `GeoScoreResult`.
+
+The result raises a risk level for the decision engine to weigh; geo-scoring can flag an enrollment for review
+but never reject one. When an address cannot be geocoded — a provider outage or an unresolvable address — the
+service emits a result with a null `RiskLevel` and a reason, and the decision engine treats the absent signal
+as fail-open. A transient outage instead raises a typed exception that replays the message through the
+listener's retry chain and, on exhaustion, lands it on the dead-letter queue, so a sustained outage surfaces
+as queue depth rather than a stream of empty scores.
