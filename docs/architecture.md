@@ -210,12 +210,31 @@ the adjacent-address scenario.
 ---
 ## 5. Building Block View (C4 Level 2)
 
-The hub is a set of independently deployable services that communicate over RabbitMQ rather than by direct call. The
-message schemas are not redefined per service. They live in a single producer-owned library, so a contract mismatch
-surfaces as a compile error rather than a runtime deserialization failure. That library is described first, because
-every other building block depends on it. The services are specified as they are introduced.
+![Container Overview](./structurizr/images/EnrollmentHubContainers.png "Container Overview")
 
-### 5.1 Contracts
+A request enters the hub through the gateway, the authenticating perimeter; past it, the hub is a set of independently
+deployable services that communicate over RabbitMQ rather than by direct call. Traffic is split across four exchanges:
+one for intake, two for the scatter-gather — a request channel carrying commands out to the checks, a result channel
+carrying replies back — and one for outbound decisions (ADR-13). The message schemas are not redefined per service. They
+live in a single producer-owned library, so a contract mismatch surfaces as a compile error rather than a runtime
+deserialization failure. The blocks are specified perimeter first: the gateway, then the shared contract library every
+other block depends on, then each service as it is introduced.
+
+### 5.1 Gateway
+
+The gateway is the hub's edge and its authenticating perimeter, built on Spring Cloud Gateway Server WebMVC. It routes
+and relays and composes no responses, so it is an authenticating gateway rather than a backend-for-frontend. An
+unauthenticated request is redirected into the OIDC `authorization_code` login against the identity provider; once the
+user holds a session, a `TokenRelay` filter attaches the access token to each proxied request. Signature, expiry, and
+issuer validation are not performed here but downstream at the decision-engine resource server, so the perimeter
+authenticates while the service that owns the data authorizes (ADR-03).
+
+It is stateful — it holds the OAuth2 login session, and scaling it horizontally requires a shared session store — but it
+holds no domain data. The login and token-relay flow is detailed in the gateway README.
+
+---
+
+### 5.2 Contracts
 
 A shared Maven module holds every event record and shared enum that crosses a service boundary. The producer of an event
 owns its schema, and consumers depend on the library. The module is a library rather than a deployable unit, with no
@@ -240,7 +259,7 @@ follows the classification in ADR-14.
 
 ---
 
-### 5.2 Geo-Scoring
+### 5.3 Geo-Scoring
 
 Geo-Scoring is the non-payment signal against synthetic identity proliferation (§4). It measures how densely
 enrollments cluster around a physical address within a short window — a quantity that stays invariant when an
@@ -271,6 +290,28 @@ the radius and threshold calibration is in the Geo-Scoring Business Analysis.
 
 ---
 
+### 5.4 Decision-Engine
+
+The decision-engine is the pipeline's coordinator and its only stateful service. It is the resource server: it
+validates the JWT the gateway relays — signature, expiry, issuer, scope — and applies flow-specific authorization on the
+contextual claims before any work begins (ADR-03). A request that passes authorization is admitted to the asynchronous
+pipeline through a single durable ingress, and from there the engine owns the enrollment's lifecycle.
+
+For each admitted request it derives the applicable signals for the route from `SignalConfig`, dispatches one command
+per signal on the request exchange, and gathers the replies on the result exchange against a durable correlation record
+in PostgreSQL (ADR-13). The same `SignalConfig` seeds both the dispatch set and the gather set, so the two cannot drift.
+Whether a settled signal is weighed as a score or as a pass/fail outcome follows the classification in ADR-14.
+
+The engine carries the system's fail-open policy. A timeout poller advances any signal still pending at the correlation
+record's deadline to a failed slot, so one check's outage degrades its signal rather than stalling the decision
+(ADR-15). Aggregation runs once every applicable signal is terminal, by whichever path completes the record — the result
+handler or the poller — guarded so a late reply cannot reopen a settled decision (ADR-16). The decision is recorded to
+the correlation record and published out of band by a dispatch relay rather than in the aggregation step, closing the
+dual-write gap between deciding and emitting (ADR-17). The engine owns the decision and the short-lived correlation
+state, not the enrollment record, which belongs to the Account Service (ADR-02).
+
+---
+
 ## 6. Runtime View
 
 ### 6.1 Geo-Scoring: From Request to Score
@@ -293,3 +334,97 @@ service emits a result with a null `RiskLevel` and a reason, and the decision en
 as fail-open. A transient outage instead raises a typed exception that replays the message through the
 listener's retry chain and, on exhaustion, lands it on the dead-letter queue, so a sustained outage surfaces
 as queue depth rather than a stream of empty scores.
+
+### 6.2 The CREDIT_CARD Happy Path
+
+The decision engine coordinates two parallel checks and emits a single decision. Geo-Scoring and Fraud Detection run
+concurrently and report back asynchronously; the decision engine aggregates the results and decides.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Applicant
+    participant O as Decision-Engine
+    participant G as Geo-Scoring
+    participant F as Fraud Detection
+    participant AS as Account Service
+    A ->> O: Submit enrollment<br/>(with payment evidence)
+    O -->> A: Submission acknowledged
+    Note over O, F: Independent checks run concurrently
+
+    par
+        O ->> G: geo.score command (shipping address)
+        G -->> O: GeoScoreResult (LOW / MEDIUM / HIGH / EXTREME)
+    and
+        O ->> F: fraud.check command (enrollment data)
+        F -->> O: FraudCheckResult (OK / FAILED / NO_RESULT)
+    end
+
+    O ->> O: Aggregate results → decide → record decision
+    O ->> AS: EnrollmentDecisionEvent (via dispatch relay, ADR-17)
+```
+
+The diagram is schematic. The acknowledgement to the applicant and the dispatch of the per-signal commands are mediated
+by the decision engine's intake channel rather than the same code path, and the final `EnrollmentDecisionEvent` is not
+published in the aggregation step: the decision is recorded to the correlation record, and a dispatch relay publishes it
+out of band (ADR-17). The dispatch mechanics are detailed in §6.3.
+
+### 6.3 Routing Strategy
+
+The decision engine dispatches one command per applicable signal; each check consumes its own command and replies. The
+routing-key strings, queue declarations, and retry/DLQ configuration are in ADR-13 and the decision engine design
+document. Three steps:
+
+**Step 0 — Durable ingress.** The REST endpoint authorizes the request synchronously and, on success, publishes a
+single durable message to the ingress exchange. No database write happens in the HTTP request thread. The decision
+engine's intake consumer then runs a `PENDING → COMPLETED` idempotency ledger on the correlation record: it inserts the
+record in the `PENDING` state under the `enrollmentId` unique constraint, dispatches the per-signal commands on the
+request exchange, and transitions the record to `COMPLETED` before acknowledging the intake message. This sequencing
+eliminates the dual-write problem at the entry point and guarantees that no check service receives a command for a
+correlation record that does not yet exist. On redelivery the consumer reads the ledger and either retries the dispatch
+when the record is still `PENDING` or acknowledges the duplicate without re-dispatching when it is already `COMPLETED`,
+so downstream commands are never lost and re-dispatch is bounded to the window before completion (ADR-13).
+
+**Step 1 — Per-signal dispatch.** The decision engine derives the applicable signals for the route from `SignalConfig`
+and publishes one command per signal to the `enrollment.check.request` exchange, routed by signal name (`geo.score`,
+`fraud.check`). The credit-card route dispatches `geo.score` + `fraud.check`; the invoice route, `fraud.check` only.
+Each command carries only the data its check needs.
+
+**Step 2 — Gather and aggregate.** Each check consumes its command, performs its work, and publishes a result on the
+`enrollment.check.result` exchange keyed by signal name. Results are correlated by `enrollmentId` and recorded against
+the durable correlation record. Once every applicable signal has settled, the decision engine aggregates, records the
+final decision on the correlation record, and a dispatch relay publishes it out of band (ADR-13, ADR-17).
+
+The applicable-signal set is defined once in `SignalConfig`, which seeds both the dispatch and the gather-set, so the
+two cannot drift (ADR-13).
+
+### 6.4 Timeout and Fail-Open
+
+A detection service can fail independently — an outage, a slow dependency, a Redis partition. When a correlation
+record's `timeout_at` deadline is reached with one or more signals still `PENDING`, the timeout poller (ADR-15) advances
+those slots to `FAILED`. The completion predicate then holds — every applicable signal is terminal — and aggregation
+runs on whatever settled before the deadline.
+
+The aggregation carries no per-signal conditional logic for this case. It dispatches on the gate classification
+(ADR-14):
+
+1. A `BEST_EFFORT` signal that timed out contributes nothing — fail-open. The `DecisionResult` reflects only the
+   signals that settled in time.
+2. A `SCORING_SIGNAL` that timed out contributes nothing — fail-open, with no routing consequence.
+3. A `REQUIRED` signal that timed out does not release the completion predicate — the decision is held and the
+   escalation policy in ADR-15 applies. No current `SignalConfig` carries this classification.
+
+The decision is computed and recorded on the correlation record once all applicable signals are terminal — by whichever
+path completes the row, the result handler or the timeout poller running the same finalize step (ADR-17) — and a
+dispatch relay publishes the `EnrollmentDecisionEvent` out of band. No signal holds the decision open beyond the
+deadline in ADR-15.
+
+**Fail-open annotation.** A fail-open decision carries the normal outcome (`APPROVED` or `CONDITIONAL_APPROVED`)
+determined by the signals that settled, annotated with the reason code `APPROVED_SCORE_MISSING` and flagged for
+operational review. Internally the missing geo-signal is recorded as a null risk level; `APPROVED_SCORE_MISSING` is the
+externally emitted reason code — the same fact, internal state versus emitted annotation.
+
+**Late-arriving results.** A result that arrives after the decision is recorded finds its correlation slot in a
+non-`PENDING` terminal state, and the idempotency guard (ADR-16) discards it without modifying the record. Whether a
+discarded late result should raise a `LateScoreArrived` event, flag the record, or remain visible only via the
+dead-letter queue is an open decision.
