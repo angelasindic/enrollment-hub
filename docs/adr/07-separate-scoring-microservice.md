@@ -9,7 +9,7 @@ Geo-Scoring could remain an in-process module withing the decision-engine.
 However, two constraints make extraction the right choice:
 
 1. **Independent failure requirement.** If Redis is unreachable or the Nominatim geocoding service is down, the
-   Geo-Scoring capability should fail without stalling the entire enrollment pipeline. Other checks should
+   Geo-Scoring capability should fail without stalling the entire decision-engine pipeline. Other checks should
    continue independently.
 
 2. **Async enrollment.** The enrollment process is not request-response — the user submits data and receives

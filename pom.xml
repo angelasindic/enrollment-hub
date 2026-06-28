@@ -20,6 +20,7 @@
 		<module>authorization-server</module>
 		<module>gateway</module>
 		<module>geo-scoring</module>
+		<module>decision-engine</module>
 	</modules>
 
 	<properties>
