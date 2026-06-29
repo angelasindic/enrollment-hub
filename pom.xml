@@ -21,6 +21,7 @@
 		<module>gateway</module>
 		<module>geo-scoring</module>
 		<module>decision-engine</module>
+		<module>fraud-detection</module>
 	</modules>
 
 	<properties>
