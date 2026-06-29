@@ -312,6 +312,23 @@ state, not the enrollment record, which belongs to the Account Service (ADR-02).
 
 ---
 
+### 5.5 Fraud-Detection
+
+Fraud-Detection is the internal fraud signal and the worked example of the extension seam. It consumes
+a `FraudCheckRequest` carrying the full enrollment data and replies with a `FraudCheckResult`. The
+signal is classified `BEST_EFFORT` (ADR-14): an explicit failure is authoritative and drives
+rejection, while a timeout or an absent result fails open.
+
+In the current build it is a stub that approves unconditionally with `SignalOutcome.OK`. It exists to
+demonstrate how a new signal attaches. The worker is a pure listener on the decision-engine-owned
+`fraud.detection.requests.queue` (ADR-13 §Channel Ownership), so replacing the stub with a real fraud
+service is confined to this module — the decision engine already declares the `FRAUD_CHECK` signal in
+`SignalConfig`, dispatches its command, and records its result. It holds no state, and a production
+implementation would own whatever stores its checks require. The candidate signals such a service
+would run remain an open decision.
+
+---
+
 ## 6. Runtime View
 
 ### 6.1 Geo-Scoring: From Request to Score
