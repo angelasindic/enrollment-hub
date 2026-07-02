@@ -17,6 +17,13 @@ spring:
     default-schema: authorization_server
     schemas: authorization_server
 
+# Simulated payment-check prerequisite issuer (ADR-03) — a trust root fully separate from the OIDC
+# issuer (its own iss/kid/JWKS), co-located here. Stands in for an external provider (e.g. Adyen).
+payment-check:
+  issuer: ${PAYMENT_CHECK_ISSUER_URI:http://localhost:9000/payment-check}
+  audience: ${ENROLLMENT_API_AUDIENCE:enrollment-api}
+  token-ttl: 10m
+
 management:
   endpoints:
     web:

@@ -38,9 +38,14 @@ spring:
           # offline and the Testcontainers ITs keep working without the IdP running.
           jwk-set-uri: ${IDP_JWKS_URI:http://localhost:9000/oauth2/jwks}
 
-# Prerequisite token validation — public keys per issuer
-# prerequisite.tokens.credit-card.jwks-uri=...
-# prerequisite.tokens.eidas.jwks-uri=...
+# Prerequisite-token validation (ADR-03). The credit_card_check token is a trust root distinct from
+# the bearer token, validated against the payment-check issuer's JWKS. eIDAS (INVOICE route) is deferred.
+prerequisite:
+  tokens:
+    credit-card:
+      issuer: ${PAYMENT_CHECK_ISSUER_URI:http://localhost:9000/payment-check}
+      jwks-uri: ${PAYMENT_CHECK_JWKS_URI:http://localhost:9000/payment-check/jwks}
+      audience: ${ENROLLMENT_API_AUDIENCE:enrollment-api}
 
 management:
   endpoints:
@@ -52,6 +57,29 @@ management:
       probes:
         enabled: true
       show-details: never
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  # Spring Boot 4.0 OTLP export lives under management.opentelemetry.<signal>.export.otlp.*
+  # (the old management.otlp.tracing/logging.* keys are deprecated at error level and ignored).
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: http://localhost:4318/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: http://localhost:4318/v1/logs
+  # Metrics use the Micrometer OTLP registry (separate path; requires micrometer-registry-otlp).
+  otlp:
+    metrics:
+      export:
+        url: http://localhost:4318/v1/metrics
+logging:
+  pattern:
+    level: "%5p[${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
 
 decision-engine:
   scatter-gather:

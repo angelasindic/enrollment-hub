@@ -168,12 +168,15 @@ public class SecurityConfiguration {
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
+                // client_credentials: the gateway calls the payment-check issuer M2M (scope prerequisite:issue).
+                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
                 .redirectUri("http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway")
                 // Must EXACTLY match the client's post_logout_redirect_uri ({baseUrl} -> no trailing slash).
                 .postLogoutRedirectUri("http://127.0.0.1:8079")
                 .scope(OidcScopes.OPENID)
                 .scope(OidcScopes.PROFILE)
                 .scope("enrollment:write")
+                .scope("prerequisite:issue")
                 .clientSettings(ClientSettings.builder().requireAuthorizationConsent(true).build())
                 .build();
     }

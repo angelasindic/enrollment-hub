@@ -54,6 +54,23 @@ management:
       probes:
         enabled: true
       show-details: never
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0          # 1.0 = sample everything; lower in prod
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: http://localhost:4318/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: http://localhost:4318/v1/logs
+  logging:
+    pattern:
+      level: "%5p[${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
+
 
 geo-scoring:
   amqp:

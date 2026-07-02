@@ -8,7 +8,16 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfToken;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+import java.io.IOException;
 
 /**
  * Gateway security: a stateful authenticating gateway (the edge).
@@ -41,9 +50,13 @@ public class SecurityConfiguration {
                 // Unauthenticated requests trigger the authorization_code login against the
                 // authorization-server; a session cookie is issued once it completes.
                 .oauth2Login(Customizer.withDefaults())
-                // The downstream enrollment call is a POST, so expose a readable CSRF cookie
-                // (XSRF-TOKEN) for browser/SPA clients rather than disabling CSRF on a stateful app.
-                .csrf((csrf) -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse()))
+                // SPA-friendly CSRF (Spring Security 7). spa() sets the readable XSRF-TOKEN cookie
+                // repository and the SpaCsrfTokenRequestHandler that accepts the raw cookie value echoed
+                // in X-XSRF-TOKEN (past the default BREACH/XOR masking). It does NOT write the cookie on a
+                // GET — the token is resolved lazily — so CsrfCookieFilter forces resolution and the
+                // cookie is issued after login.
+                .csrf((csrf) -> csrf.spa())
+                .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
                 // RP-initiated logout: clears the local session and ends the authorization-server session.
                 .logout((logout) -> logout
                         .logoutSuccessHandler(logoutSuccessHandler)
@@ -52,5 +65,25 @@ public class SecurityConfiguration {
                 );
 
         return http.build();
+    }
+
+    /**
+     * Resolves the deferred CSRF token on every request so {@code spa()}'s readable XSRF-TOKEN cookie is
+     * actually written, even on a plain GET. Runs after {@link CsrfFilter}, which by then has placed the
+     * deferred token in the {@code _csrf} request attribute; calling {@code getToken()} forces
+     * {@code CookieCsrfTokenRepository.saveToken} to emit {@code Set-Cookie: XSRF-TOKEN}. Without it the
+     * cookie is absent until a state-changing request — leaving a browser/SPA client with no token to
+     * echo right after login.
+     */
+    static final class CsrfCookieFilter extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                        FilterChain filterChain) throws ServletException, IOException {
+            CsrfToken csrfToken = (CsrfToken) request.getAttribute("_csrf");
+            if (csrfToken != null) {
+                csrfToken.getToken();
+            }
+            filterChain.doFilter(request, response);
+        }
     }
 }

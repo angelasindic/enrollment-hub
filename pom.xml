@@ -6,7 +6,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.3</version>
+		<version>4.0.7</version>
 		<relativePath/>
 	</parent>
 
@@ -36,6 +36,36 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
+		</dependency>
+		<!-- todo: add it to a separate module -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<!-- Spring Boot 4.0 moved tracing autoconfig out of actuator-autoconfigure into
+		     spring-boot-micrometer-tracing-* modules. This one supplies OpenTelemetryTracingAutoConfiguration
+		     and OtlpTracingAutoConfiguration, which wire the tracer and OTLP span exporter from
+		     management.otlp.tracing.*. Without it the bridge/exporter libraries below are inert. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-micrometer-tracing-opentelemetry</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-tracing-bridge-otel</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-exporter-otlp</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.opentelemetry.instrumentation</groupId>
+			<artifactId>opentelemetry-logback-appender-1.0</artifactId>
+			<!-- Version MUST track the OTel core the Boot BOM manages (opentelemetry 1.55.0 ->
+			     instrumentation 2.21.0-alpha). A newer appender calls OTel API methods absent in 1.55.0
+			     (e.g. LogRecordBuilder.setException) -> NoSuchMethodError at startup. Compile scope so app
+			     code can call OpenTelemetryAppender.install(...) (Spring Boot does not auto-install it). -->
+			<version>2.21.0-alpha</version>
 		</dependency>
 	</dependencies>
 
