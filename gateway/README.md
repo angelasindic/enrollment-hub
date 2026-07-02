@@ -36,8 +36,25 @@ sequenceDiagram
 
 - **`oauth2Login`** drives the OIDC `authorization_code` flow. A single client registration (`enrollment-gateway`) means an unauthenticated request redirects straight to the IdP.
 - **`TokenRelay`** filter attaches the logged-in user's access token to each proxied request.
-- **CSRF** uses a readable `XSRF-TOKEN` cookie (`CookieCsrfTokenRepository`) so browser and SPA clients can POST through the gateway.
+- **CSRF** pairs Spring Security 7's `csrf().spa()` with a small `CsrfCookieFilter`. `spa()` provides the readable `XSRF-TOKEN` cookie repository and a `SpaCsrfTokenRequestHandler` that accepts the raw cookie value echoed in the `X-XSRF-TOKEN` header (past the default BREACH/XOR masking). It does **not** write the cookie on a plain GET — the token is resolved lazily — so `CsrfCookieFilter` forces resolution and the cookie is issued on the first authenticated GET; without it a browser/SPA client lands after login with no token to echo.
 - **RP-initiated logout** ends both the local session and the authorization-server session.
+
+## Prerequisite payment-check (credit-card route)
+
+The credit-card route requires a signed `credit_card_check` attestation before an enrollment is accepted. The token is held server-side under the gateway's custody (BFF), so the browser never sees it.
+
+1. After login, the client calls `POST /payment-check` (session cookie + `X-XSRF-TOKEN`). The gateway fetches the attestation from the issuer server-to-server — the `payment-check` `client_credentials` registration (client `enrollment-gateway`, scope `prerequisite:issue`) — and stores it in the session. The response is `204 No Content`; the JWT stays server-side.
+2. The next `POST /enrollment/**` carries only the session cookie. `PrerequisiteTokenRelayFilter` attaches the stored attestation alongside the relayed access token, and the decision-engine validates it (issuer `…/payment-check`, audience `enrollment-api`, claim `type=credit_card_check`, RS256, keys at `GET /payment-check/jwks`). The decision-engine rejects a credit-card enrollment that arrives without it.
+
+The issuer is simulated and co-located in the [authorization-server](../authorization-server) as a trust root separate from the OIDC issuer. For local testing it can be called directly (10-minute TTL):
+
+```
+curl -X POST http://localhost:9000/payment-check/credit-card \
+  -H 'Authorization: Bearer <client_credentials token, scope prerequisite:issue>' \
+  -H 'Content-Type: application/json' \
+  -d '{"subject":"<user-subject>"}'
+# → {"token":"<credit_card_check JWT>"}
+```
 
 ## Routes
 

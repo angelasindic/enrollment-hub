@@ -151,7 +151,7 @@ end
     EX_REQ -->|"fraud.check"| Q_FRAUD
     EX_RES -->|"geo.score"| Q_DE_GEO
     EX_RES -->|"fraud.check"| Q_DE_FRAUD
-    EX_DECISIONS -->|"enrollment.decision"| Q_AS
+    EX_DECISIONS -->|"enrollment.decision.completed"| Q_AS
     classDef ex fill:#fef3c7,stroke:#b45309
     classDef q fill:#a7badb,stroke:#54698c
 ```
@@ -184,7 +184,7 @@ if a specific check worker service is offline during a deployment window, the en
 the broker accumulates them on the engine-owned request queue without returning unroutable errors.
 
 **Layer 3 — outbound: `enrollment.decisions`.** A single logical publisher (the decision engine) on
-a dedicated topic exchange with routing key `enrollment.decision`. The Account Service consumes it
+a dedicated topic exchange with routing key `enrollment.decision.completed`. The Account Service consumes it
 and owns `account-service.decisions.queue`, whose binding and DLX are out of scope. The publish is
 not a direct send from the result handler or the timeout poller: the decision is computed once and
 persisted on the correlation record, then the `DecisionDispatchJob` relay claims

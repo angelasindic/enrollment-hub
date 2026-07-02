@@ -4,6 +4,7 @@ import dev.sindic.enrollmenthub.decisionengine.domain.Address;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.domain.Person;
+import dev.sindic.enrollmenthub.decisionengine.security.PrerequisiteTokenValidator;
 import dev.sindic.enrollmenthub.decisionengine.service.EnrollmentIntakeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -15,9 +16,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -40,6 +44,7 @@ import java.util.UUID;
 public class EnrollmentController {
 
     private final EnrollmentIntakeService enrollmentService;
+    private final PrerequisiteTokenValidator prerequisiteTokenValidator;
 
     @PostMapping
     @Operation(
@@ -66,6 +71,12 @@ public class EnrollmentController {
                                     mediaType = MediaType.APPLICATION_JSON_VALUE,
                                     schema = @Schema(implementation = ErrorResponse.class))),
                     @ApiResponse(
+                            responseCode = "403",
+                            description = "Missing or invalid prerequisite token (credit_card_check) for the payment route",
+                            content = @Content(
+                                    mediaType = MediaType.APPLICATION_JSON_VALUE,
+                                    schema = @Schema(implementation = ErrorResponse.class))),
+                    @ApiResponse(
                             responseCode = "503",
                             description = "Messaging infrastructure unavailable — retry later",
                             content = @Content(
@@ -78,11 +89,22 @@ public class EnrollmentController {
                                     mediaType = MediaType.APPLICATION_JSON_VALUE,
                                     schema = @Schema(implementation = ErrorResponse.class)))
             })
-    public ResponseEntity<EnrollmentResponse> createEnrollment(@Valid @RequestBody EnrollmentRequest request) {
+    public ResponseEntity<EnrollmentResponse> createEnrollment(
+            @Valid @RequestBody EnrollmentRequest request,
+            @RequestHeader(name = "X-Prerequisite-Token", required = false) String prerequisiteToken,
+            @AuthenticationPrincipal Jwt principal) {
+        // Conditional prerequisite validation (ADR-03): reject before any correlation record is created.
+        if (requiresCreditCardCheck(request)) {
+            prerequisiteTokenValidator.validateCreditCardCheck(prerequisiteToken, principal.getSubject());
+        }
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(new EnrollmentResponse(
                         enrollmentService.receiveEnrollment(createDomainRequest(request)).enrollmentId())
                 );
+    }
+
+    private static boolean requiresCreditCardCheck(EnrollmentRequest request) {
+        return request.paymentType() == dev.sindic.enrollmenthub.contracts.domain.PaymentType.CREDIT_CARD;
     }
 
     EnrollmentCommand createDomainRequest(EnrollmentRequest request) {

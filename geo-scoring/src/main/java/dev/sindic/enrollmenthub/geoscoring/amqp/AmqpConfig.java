@@ -9,6 +9,7 @@ import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFacto
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
+import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -57,7 +58,16 @@ class AmqpConfig {
      */
     @Bean
     JacksonJsonMessageConverter messageConverter(JsonMapper jsonMapper) {
-        return new JacksonJsonMessageConverter(jsonMapper);
+        JacksonJsonMessageConverter converter = new JacksonJsonMessageConverter(jsonMapper);
+        // Header-based (__TypeId__) deserialization — e.g. RabbitTemplate.receiveAndConvert in the ITs —
+        // must trust our contracts packages; the converter's default trusts only java.util / java.lang.
+        // Trusted-package matching is EXACT (no '.*' wildcard; only "*" = trust all), so list them.
+        DefaultJacksonJavaTypeMapper typeMapper = new DefaultJacksonJavaTypeMapper();
+        typeMapper.setTrustedPackages(
+                "dev.sindic.enrollmenthub.contracts.events",
+                "dev.sindic.enrollmenthub.contracts.domain");
+        converter.setJavaTypeMapper(typeMapper);
+        return converter;
     }
 
     /**
@@ -94,6 +104,9 @@ class AmqpConfig {
         var template = new RabbitTemplate(connectionFactory);
         template.setMessageConverter(messageConverter);
         template.setMandatory(true);
+        // Producer-side observation: injects the W3C traceparent into published messages so the
+        // consuming service continues the same trace (the listener factory already enables it).
+        template.setObservationEnabled(true);
 
         template.setConfirmCallback((correlationData, ack, cause) -> {
             if (!ack) {

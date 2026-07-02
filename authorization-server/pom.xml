@@ -26,6 +26,11 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
+		<!-- Resource server — validates the client-credentials token guarding /payment-check (ADR-03) -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+		</dependency>
 		<!-- Actuator — /actuator/health for ALB and ECS task health checks -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

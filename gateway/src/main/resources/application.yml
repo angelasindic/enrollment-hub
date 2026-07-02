@@ -30,6 +30,15 @@ spring:
               - openid
               - profile
               - enrollment:write
+          # client_credentials registration for the server-to-server payment-check call (Step 3):
+          # same client, distinct grant + scope. No redirect-uri (not a user/login flow).
+          payment-check:
+            provider: spring-authorization-server
+            client-id: enrollment-gateway
+            client-secret: ${GATEWAY_CLIENT_SECRET:enrollment-secret}
+            authorization-grant-type: client_credentials
+            scope:
+              - prerequisite:issue
   cloud:
     gateway:
       server:
@@ -47,6 +56,11 @@ server:
   port: 8079
   forward-headers-strategy: framework
 
+# Simulated payment-check issuer (co-located in the authorization-server). The gateway calls
+# POST {issuer-uri}/credit-card server-to-server with the client_credentials token (Step 3 / ADR-03).
+payment-check:
+  issuer-uri: ${PAYMENT_CHECK_ISSUER_URI:http://localhost:9000/payment-check}
+
 management:
   endpoints:
     web:
@@ -57,3 +71,20 @@ management:
       probes:
         enabled: true
       show-details: never
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0          # 1.0 = sample everything; lower in prod
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: http://localhost:4318/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: http://localhost:4318/v1/logs
+  logging:
+    pattern:
+      level: "%5p[${spring.application.name:},%X{traceId:-},%X{spanId:-}]"
+

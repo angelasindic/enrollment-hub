@@ -2,6 +2,8 @@ package dev.sindic.enrollmenthub.decisionengine.api;
 
 import dev.sindic.enrollmenthub.decisionengine.config.SecurityConfiguration;
 import dev.sindic.enrollmenthub.decisionengine.domain.PendingEnrollmentResponse;
+import dev.sindic.enrollmenthub.decisionengine.security.PrerequisiteTokenValidator;
+import dev.sindic.enrollmenthub.decisionengine.security.PrerequisiteValidationException;
 import dev.sindic.enrollmenthub.decisionengine.service.EnrollmentIntakeService;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,8 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -55,6 +59,10 @@ class EnrollmentControllerTest {
     @MockitoBean
     JwtDecoder jwtDecoder;
 
+    /** Mocked so the controller's conditional wiring is tested without a real prerequisite JWKS. */
+    @MockitoBean
+    PrerequisiteTokenValidator prerequisiteValidator;
+
     @Test
     void returns202WithEnrollmentId() throws Exception {
         UUID enrollmentId = UUID.randomUUID();
@@ -84,6 +92,34 @@ class EnrollmentControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(validBody())))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void returns403WhenCreditCardPrerequisiteRejected() throws Exception {
+        willThrow(new PrerequisiteValidationException("missing credit_card_check prerequisite token"))
+                .given(prerequisiteValidator).validateCreditCardCheck(any(), any());
+
+        mockMvc.perform(post(ENDPOINT)
+                        .with(writeScope())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validBody())))   // CREDIT_CARD route
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void invoiceRouteSkipsPrerequisiteValidation() throws Exception {
+        given(enrollmentService.receiveEnrollment(any()))
+                .willReturn(new PendingEnrollmentResponse(UUID.randomUUID().toString()));
+        Map<String, Object> body = validBody();
+        body.put("paymentType", "INVOICE");
+
+        mockMvc.perform(post(ENDPOINT)
+                        .with(writeScope())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isAccepted());
+
+        then(prerequisiteValidator).shouldHaveNoInteractions();
     }
 
     @Test
