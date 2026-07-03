@@ -19,8 +19,8 @@ import java.time.Duration;
 @SpringBootTest
 public abstract class BaseIntegrationTest {
 
-    // Images pinned to immutable SHA256 digests for reproducible builds.
-    // Update via Renovate (see renovate.json customManagers).
+    // Images pinned to immutable SHA256 digests for reproducible builds; updated manually —
+    // Dependabot (.github/dependabot.yml) does not manage digests embedded in Java sources.
     private static final String RABBITMQ_IMAGE =
             "rabbitmq:4-management-alpine@sha256:b618738ea52cb6d0073ee9f0412ede133411ecacd7afa40f17be748a6d9a9ee1";
     private static final String VALKEY_IMAGE =

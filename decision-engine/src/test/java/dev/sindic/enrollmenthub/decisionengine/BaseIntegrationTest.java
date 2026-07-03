@@ -16,14 +16,14 @@ import org.testcontainers.utility.DockerImageName;
  * context key. Ports are stable for the lifetime of the JVM; Testcontainers Ryuk cleans
  * up on JVM shutdown.
  * <p>
- * Images are pinned to immutable SHA256 digests for reproducible builds.
- * Update via Renovate (see {@code renovate.json} customManagers).
+ * Images are pinned to immutable SHA256 digests for reproducible builds; updated manually —
+ * Dependabot ({@code .github/dependabot.yml}) does not manage digests embedded in Java sources.
  */
 @SpringBootTest
 public abstract class BaseIntegrationTest {
 
-    // Images pinned to immutable SHA256 digests for reproducible builds.
-    // Update via Renovate (see renovate.json customManagers).
+    // Images pinned to immutable SHA256 digests for reproducible builds; updated manually —
+    // Dependabot (.github/dependabot.yml) does not manage digests embedded in Java sources.
     private static final String POSTGRES_IMAGE =
             "postgres:16@sha256:80dee66a0ba95a54d143008143e5d7ef628c0e8d5e0666b39d13c8bac3377953";
     private static final String RABBITMQ_IMAGE =

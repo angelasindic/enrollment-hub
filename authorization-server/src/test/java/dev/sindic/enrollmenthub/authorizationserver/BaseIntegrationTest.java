@@ -12,12 +12,13 @@ import org.testcontainers.utility.DockerImageName;
  * A single Postgres container is started once for the JVM session so the Spring test context cache
  * works across test classes sharing the same context key. Flyway runs the {@code authorization_server}
  * migrations against it on context start, so the SAS Jdbc services + JdbcUserDetailsManager exercise
- * the real schema. The image is pinned to an immutable digest (updated via Renovate).
+ * the real schema. The image is pinned to an immutable digest, updated manually on version bumps.
  */
 @SpringBootTest
 public abstract class BaseIntegrationTest {
 
-    // Pinned to an immutable SHA256 digest for reproducible builds (Renovate customManager).
+    // Pinned to an immutable SHA256 digest for reproducible builds; updated manually —
+    // Dependabot (.github/dependabot.yml) does not manage digests embedded in Java sources.
     private static final String POSTGRES_IMAGE =
             "postgres:17-alpine@sha256:dc17045ccfd343b49600570ea734b9c4991cf1c3f3302e67df51e3b402dd55c4";
 
