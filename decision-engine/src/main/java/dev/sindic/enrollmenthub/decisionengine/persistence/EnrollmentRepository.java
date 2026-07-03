@@ -1,6 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.persistence;
 
-import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.IntakeStatus;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
@@ -181,6 +180,50 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
              ORDER BY r.timeoutAt ASC
             """)
     List<EnrollmentEntity> claimPendingTimeouts(@Param("now") Instant now, Pageable pageable);
+
+    /**
+     * Atomically claims a batch of decided-but-undispatched rows for the decision dispatch
+     * relay (ADR-17), each held under {@code PESSIMISTIC_WRITE} until the transaction commits.
+     * Same {@code SKIP LOCKED} idiom as {@link #claimPendingTimeouts}: rows locked by another
+     * relay instance or by the eager dispatch's stamp are skipped, so concurrent dispatchers
+     * partition the outbox into disjoint sets.
+     *
+     * <p>The claim predicate is the outbox state: {@code decision_result IS NOT NULL AND
+     * dispatched_at IS NULL}. In steady state the eager after-commit dispatch has already
+     * stamped every decided row, so this scan comes back empty (backed by the partial index
+     * {@code idx_enrollments_undispatched}).
+     *
+     * @param pageable batch sizer; small batches bound per-transaction lock duration
+     * @return claimed rows by {@code decidedAt} ascending, disjoint from other callers
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")})
+    @Query("""
+            SELECT r FROM EnrollmentEntity r
+             WHERE r.decisionResult IS NOT NULL
+               AND r.dispatchedAt IS NULL
+             ORDER BY r.decidedAt ASC
+            """)
+    List<EnrollmentEntity> claimUndispatched(Pageable pageable);
+
+    /**
+     * Stamps the outbox marker after the publisher confirm for the decision event returned
+     * (ADR-17 ordering rule: publish → await confirm → stamp, never before). Guarded by
+     * {@code dispatched_at IS NULL} so the eager after-commit dispatch and the relay cannot
+     * double-stamp a row they raced on; the loser observes {@code 0} — not an error, the
+     * duplicate publish is byte-identical (same {@code decision_id}) and absorbed downstream.
+     *
+     * @return {@code 1} if this call stamped the row; {@code 0} if it was already stamped
+     */
+    @Modifying
+    @Query("""
+            UPDATE EnrollmentEntity r
+               SET r.dispatchedAt = :dispatchedAt
+             WHERE r.enrollmentId = :enrollmentId
+               AND r.dispatchedAt IS NULL
+            """)
+    int markDispatched(@Param("enrollmentId") UUID enrollmentId,
+                       @Param("dispatchedAt") Instant dispatchedAt);
 
     /**
      * Read-only counterpart to {@link #claimPendingTimeouts(Instant, Pageable)}.

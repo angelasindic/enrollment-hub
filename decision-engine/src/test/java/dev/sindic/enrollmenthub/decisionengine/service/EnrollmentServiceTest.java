@@ -1,7 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentDecisionEvent;
-import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentDecisionPublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
@@ -10,12 +8,15 @@ import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -24,6 +25,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -41,7 +43,7 @@ class EnrollmentServiceTest {
     private static final Clock FIXED_CLOCK = Clock.fixed(Instant.parse("2026-04-13T12:00:42Z"), ZoneOffset.UTC);
 
     @Mock EnrollmentRepository repository;
-    @Mock EnrollmentDecisionPublisher publisher;
+    @Mock DecisionDispatcher dispatcher;
 
     EnrollmentService service;
 
@@ -49,9 +51,24 @@ class EnrollmentServiceTest {
     void setUp() {
         service = new EnrollmentService(
                 repository,
-                publisher,
+                dispatcher,
                 tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build(),
                 FIXED_CLOCK);
+        // The production callers run inside @Transactional; the finalize step registers an
+        // afterCommit synchronization there. Activate synchronization so registration works,
+        // and simulate the commit explicitly via simulateCommit().
+        TransactionSynchronizationManager.initSynchronization();
+    }
+
+    @AfterEach
+    void tearDown() {
+        TransactionSynchronizationManager.clearSynchronization();
+    }
+
+    /** Fires the afterCommit callbacks the service registered — the unit-test stand-in for a commit. */
+    private static void simulateCommit() {
+        TransactionSynchronizationManager.getSynchronizations()
+                .forEach(TransactionSynchronization::afterCommit);
     }
 
     @Test
@@ -66,7 +83,7 @@ class EnrollmentServiceTest {
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.HIGH));
 
-        // THEN the new signals JSON went to the explicit UPDATE; no decision recorded; no publish.
+        // THEN the new signals JSON went to the explicit UPDATE; no decision, no dispatch hook.
         var jsonCaptor = ArgumentCaptor.forClass(String.class);
         then(repository).should().updateSignals(eq(enrollmentId), jsonCaptor.capture());
         assertThat(jsonCaptor.getValue())
@@ -77,11 +94,12 @@ class EnrollmentServiceTest {
                 .contains("\"FRAUD_CHECK\"")
                 .contains("\"PENDING\"");
         then(repository).should(never()).completeWithDecision(any(), any(), any(), any(), any());
-        then(publisher).should(never()).publish(any());
+        simulateCommit();
+        then(dispatcher).should(never()).dispatchNow(any());
     }
 
     @Test
-    void recordSignalResult_completesAndPublishesDecision_whenAllSignalsSettle() {
+    void recordSignalResult_completesAndDispatchesAfterCommit_whenAllSignalsSettle() {
         // GIVEN a CREDIT_CARD entity with FRAUD already settled OK.
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
@@ -114,17 +132,11 @@ class EnrollmentServiceTest {
         assertThat(decisionIdCaptor.getValue()).isNotNull();
         assertThat(decidedAtCaptor.getValue()).isEqualTo(FIXED_CLOCK.instant());
 
-        var eventCaptor = ArgumentCaptor.forClass(EnrollmentDecisionEvent.class);
-        then(publisher).should().publish(eventCaptor.capture());
-        var event = eventCaptor.getValue();
-        assertThat(event.decisionId()).isEqualTo(decisionIdCaptor.getValue());
-        assertThat(event.decidedAt()).isEqualTo(FIXED_CLOCK.instant());
-        assertThat(event.decisionResult())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.DecisionResult.APPROVED);
-        assertThat(event.signals().get("GEO_SCORE").riskLevel())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.RiskLevel.LOW);
-        assertThat(event.signals().get("FRAUD_CHECK").outcome())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.SignalOutcome.OK);
+        // AND no publish inside the transaction (ADR-17 commit-then-publish) —
+        // the eager dispatch fires only on commit.
+        then(dispatcher).should(never()).dispatchNow(any());
+        simulateCommit();
+        then(dispatcher).should().dispatchNow(enrollmentId);
     }
 
     @Test
@@ -137,10 +149,11 @@ class EnrollmentServiceTest {
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.HIGH));
 
-        // No write, no decision, no publish — silent idempotent return.
+        // No write, no decision, no dispatch — silent idempotent return.
         then(repository).should(never()).updateSignals(any(), any());
         then(repository).should(never()).completeWithDecision(any(), any(), any(), any(), any());
-        then(publisher).should(never()).publish(any());
+        simulateCommit();
+        then(dispatcher).should(never()).dispatchNow(any());
     }
 
     @Test
@@ -154,7 +167,7 @@ class EnrollmentServiceTest {
                 .hasMessageContaining(enrollmentId.toString());
 
         then(repository).should(never()).updateSignals(any(), any());
-        then(publisher).should(never()).publish(any());
+        then(dispatcher).should(never()).dispatchNow(any());
     }
 
     @Test
@@ -175,15 +188,15 @@ class EnrollmentServiceTest {
                 .hasMessageContaining("0");
 
         then(repository).should(never()).completeWithDecision(any(), any(), any(), any(), any());
-        then(publisher).should(never()).publish(any());
+        then(dispatcher).should(never()).dispatchNow(any());
     }
 
     @Test
-    void recordSignalResult_skipsPublishWhenCompleteWithDecisionAffectsZeroRows() {
+    void recordSignalResult_skipsDispatchWhenCompleteWithDecisionAffectsZeroRows() {
         // Edge case: the decision_result IS NULL guard rejected the combined
         // UPDATE, meaning a parallel path already recorded the decision.
         // Under our PESSIMISTIC_WRITE lock this is structurally impossible,
-        // but if it does happen we must not double-publish.
+        // but if it does happen we must not register a second dispatch.
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
         entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
@@ -193,24 +206,27 @@ class EnrollmentServiceTest {
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
                 SignalState.settled(RiskLevel.LOW));
 
-        then(publisher).should(never()).publish(any());
+        simulateCommit();
+        then(dispatcher).should(never()).dispatchNow(any());
     }
 
     @Test
-    void recordSignalResult_propagatesPublisherFailure_soTxRollsBack() {
-        // Inside the @Transactional method a publisher exception rolls back the
-        // explicit UPDATE we just issued — that's the ADR-16 contract.
+    void eagerDispatchFailure_isContainedByTheAfterCommitHook() {
+        // The commit is already durable when the hook fires; a dispatch failure must be
+        // swallowed (logged) so the inbound message is not nacked for a decision that
+        // decided correctly. Re-delivery is the relay's job (ADR-17).
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
         entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
         given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(1);
-        doThrow(new RuntimeException("broker down")).when(publisher).publish(any());
+        doThrow(new RuntimeException("broker down")).when(dispatcher).dispatchNow(enrollmentId);
 
-        assertThatThrownBy(() -> service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.LOW)))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessage("broker down");
+        service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
+                SignalState.settled(RiskLevel.LOW));
+
+        assertThatCode(EnrollmentServiceTest::simulateCommit).doesNotThrowAnyException();
+        then(dispatcher).should().dispatchNow(enrollmentId);
     }
 
     @Test
@@ -227,6 +243,7 @@ class EnrollmentServiceTest {
                 SignalState.settled(RiskLevel.LOW));
 
         then(repository).should(never()).updateSignals(any(), any());
-        then(publisher).should(never()).publish(any());
+        simulateCommit();
+        then(dispatcher).should(never()).dispatchNow(any());
     }
 }

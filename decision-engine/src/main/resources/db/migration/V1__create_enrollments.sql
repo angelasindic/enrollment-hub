@@ -31,7 +31,12 @@ CREATE TABLE enrollment_hub.enrollments (
     -- Timestamps
     created_at              TIMESTAMPTZ     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     timeout_at              TIMESTAMPTZ     NOT NULL,
-    decided_at              TIMESTAMPTZ
+    decided_at              TIMESTAMPTZ,
+
+    -- Outbox marker (ADR-17): stamped only after the publisher confirm for the
+    -- EnrollmentDecisionEvent returns. decision_result NOT NULL + dispatched_at NULL
+    -- = decided, awaiting delivery — the dispatch relay's claim predicate.
+    dispatched_at           TIMESTAMPTZ
 );
 
 -- Index for the Timeout Poller
@@ -42,3 +47,9 @@ CREATE INDEX idx_enrollments_timeout_undecided
 -- GIN index for efficient querying inside the signals JSONB column
 CREATE INDEX idx_enrollments_signals_jsonb
     ON enrollment_hub.enrollments USING GIN (signals);
+
+-- Partial index for the decision dispatch relay (ADR-17): decided-but-undispatched rows only,
+-- so the steady-state relay tick is a probe against an (almost always empty) index.
+CREATE INDEX idx_enrollments_undispatched
+    ON enrollment_hub.enrollments (decided_at)
+    WHERE decision_result IS NOT NULL AND dispatched_at IS NULL;

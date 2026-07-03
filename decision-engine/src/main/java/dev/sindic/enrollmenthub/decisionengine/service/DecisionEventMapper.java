@@ -1,12 +1,12 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
+import dev.sindic.enrollmenthub.contracts.domain.EnrollmentSnapshot;
 import dev.sindic.enrollmenthub.contracts.events.DecisionResult;
 import dev.sindic.enrollmenthub.contracts.events.EnrollmentDecisionEvent;
 import dev.sindic.enrollmenthub.contracts.events.EnrollmentSignal;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
 import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
-import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentDecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
@@ -19,16 +19,17 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Builds the outbound {@link EnrollmentDecisionEvent} from the just-decided
- * state.
+ * Builds the outbound {@link EnrollmentDecisionEvent} from the persisted, frozen decision
+ * state (ADR-17: delivery replays the persisted decision and never recomputes it).
  *
- * <p>Inputs are passed in explicitly (signals map, decision, decisionId,
- * decidedAt) rather than read from the entity, because the entity's
- * in-memory state is stale relative to the JSON-column {@code UPDATE} the
- * service issued moments earlier (ADR-16 §Write path: explicit {@code UPDATE} for the
- * {@code signals} column; the loaded entity is not refreshed). The entity is
- * still the source of truth for fields this service path did not write — the
- * immutable {@code original_request} column.
+ * <p>Invoked by {@code DecisionDispatcher} with values read from a freshly-loaded row.
+ * They are passed as explicit parameters rather than plucked from the entity here so the
+ * mapper stays a pure function testable without persistence.
+ *
+ * <p>The stored {@code original_request} is deserialised into the id-carrying intake payload
+ * ({@link EnrollmentData}) and mapped down to {@link EnrollmentSnapshot}: the correlation
+ * {@code enrollmentId} is the database primary key and must not leave the service — consumers
+ * deduplicate on {@code decisionId}, which is frozen at decide time.
  */
 final class DecisionEventMapper {
 
@@ -41,7 +42,7 @@ final class DecisionEventMapper {
     EnrollmentDecisionEvent buildDecisionEvent(
             EnrollmentEntity entity,
             Map<SignalConfig, SignalState> signals,
-            EnrollmentDecisionResult decision,
+            dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult decision,
             UUID decisionId,
             Instant decidedAt) {
 
@@ -51,10 +52,15 @@ final class DecisionEventMapper {
         }
         return new EnrollmentDecisionEvent(
                 decisionId,
-                jsonMapper.readValue(entity.getOriginalRequest(), EnrollmentData.class),
-                DecisionResult.valueOf(decision.decision().name()),
+                toSnapshot(jsonMapper.readValue(entity.getOriginalRequest(), EnrollmentData.class)),
+                DecisionResult.valueOf(decision.name()),
                 contractSignals,
                 decidedAt);
+    }
+
+    private static EnrollmentSnapshot toSnapshot(EnrollmentData data) {
+        return new EnrollmentSnapshot(
+                data.paymentType(), data.person(), data.shippingAddress(), data.billingAddress());
     }
 
     private static EnrollmentSignal toContractSignal(SignalState state) {

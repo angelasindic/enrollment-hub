@@ -53,12 +53,9 @@ class EnrollmentIntakeServiceTest {
     @Mock EnrollmentCorrelationService correlationService;
 
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-    private static final tools.jackson.databind.json.JsonMapper JSON_MAPPER =
-            tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
 
     private EnrollmentIntakeService buildService() {
-        return new EnrollmentIntakeService(
-                repository, correlationService, intakePublisher, checkRequestPublisher, JSON_MAPPER, clock, TIMEOUT);
+        return new EnrollmentIntakeService(correlationService, intakePublisher, checkRequestPublisher, clock);
     }
 
     @Nested

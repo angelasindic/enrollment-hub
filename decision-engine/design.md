@@ -2,8 +2,11 @@
 
 > **Status.** This document specifies the target design. The synchronous JWT prerequisite
 > gate is **not yet implemented in MVP 1** — see ADR-03. The separate
-> `enrollment.decisions` exchange (§Exchange and queue topology) and the scheduled timeout poller
-> (ADR-15, `TimeoutPoller` + `EnrollmentService.processExpiredTimeouts`) are now implemented.
+> `enrollment.decisions` exchange (§Exchange and queue topology), the timeout policy
+> (ADR-15, `EnrollmentService.processExpiredTimeouts`), and the decision dispatch outbox
+> (ADR-17, `DecisionDispatcher`) are now implemented. Both the timeout finalize and the dispatch
+> backstop run as the two phases of a single scheduled `EnrollmentSweepJob` (§Decision outbox and
+> dispatch relay).
 > The Correlation Record schema, Domain Model, and Decision Engine sections describe what is
 > implemented today (ADR-14).
 
@@ -187,10 +190,12 @@ the broker accumulates them on the engine-owned request queue without returning 
 a dedicated topic exchange with routing key `enrollment.decision.completed`. The Account Service consumes it
 and owns `account-service.decisions.queue`, whose binding and DLX are out of scope. The publish is
 not a direct send from the result handler or the timeout poller: the decision is computed once and
-persisted on the correlation record, then the `DecisionDispatchJob` relay claims
-decided-but-undispatched rows and publishes them with Publisher Confirms, marking each dispatched
-only after the confirm returns (ADR-17). The relay reads from the database, not a queue, so it adds
-no internal queue or DLQ of its own.
+persisted on the correlation record, then dispatched through one shared path (`DecisionDispatcher`)
+with two triggers — an after-commit eager dispatch owning steady-state latency, and the
+`EnrollmentSweepJob` dispatch phase claiming decided-but-undispatched rows as the durability backstop.
+Both publish with Publisher Confirms and mark the row dispatched only after the confirm returns
+(ADR-17). The backstop reads from the database, not a queue, so it adds no internal queue or DLQ of
+its own.
 
 #### Dead-letter topology
 
@@ -220,7 +225,7 @@ The guarantee model and its reasoning are in ADR-13 §Delivery & Concurrency Gua
 | At-least-once delivery (all channels)       | Publisher Confirms + mandatory routing                                                     | Idempotent receiver on natural key           |
 | Causal ordering (record before trigger)     | Commit-before-publish in intake listener                                                   | N/A — enforced by producer                   |
 | Exactly-once decision **computation**       | Row-level pessimistic locking + completion predicate; one decider (result handler or timeout poller) records the decision | N/A — enforced by aggregator                 |
-| At-least-once decision **delivery**         | Persist-then-publish outbox on the correlation record + dispatch relay with Publisher Confirms (ADR-17) | Idempotent receiver on `enrollmentId`        |
+| At-least-once decision **delivery**         | Persist-then-publish outbox on the correlation record + eager after-commit dispatch + relay with Publisher Confirms (ADR-17) | Idempotent receiver on `decisionId` (frozen at decide time; replays are byte-identical) |
 | Poison-pill containment                     | DLX after bounded retry                                                                    | Ops review, manual replay                    |
 
 ### Correlation Record
@@ -237,10 +242,12 @@ enrollment_hub.enrollments
   - created_at           TIMESTAMPTZ  NOT NULL
   - timeout_at           TIMESTAMPTZ  NOT NULL
   - decided_at           TIMESTAMPTZ  NULL
+  - dispatched_at        TIMESTAMPTZ  NULL          ← outbox marker (ADR-17): stamped after the publisher confirm; decided + NULL = awaiting delivery
 
 Indexes:
   - idx_enrollments_timeout_undecided  (timeout_at) WHERE decision_result IS NULL   ← timeout poller (ADR-15)
   - idx_enrollments_signals_jsonb      GIN (signals)
+  - idx_enrollments_undispatched       (decided_at) WHERE decision_result IS NOT NULL AND dispatched_at IS NULL   ← dispatch relay (ADR-17)
 ```
 
 The `enrollment_id` PRIMARY KEY is what makes the intake listener idempotent against
@@ -341,7 +348,8 @@ These two behaviors map directly to SQL syntax options executed against PostgreS
    because incoming concurrent signals for the same enrollment must serialize sequentially. The second arriving thread
    must block until the first thread commits its signal changes and releases the row lock, ensuring that the completion
    predicate evaluates against a fully updated, fresh snapshot of all preceding signals.
-2. **`DecisionDispatchJob` & `TimeoutPoller` routines** utilize the Hibernate sentinel to generate
+2. **The `EnrollmentSweepJob` phases** (`claimUndispatched` for dispatch, `claimPendingTimeouts` for timeouts)
+   utilize the Hibernate sentinel to generate
    `SELECT ... FOR UPDATE SKIP LOCKED`. The **SKIP LOCKED** modifier prevents a background engine poller from blocking
    behind an active result handler thread. If a result handler is currently updating a row, the poller gracefully
    bypasses it, preventing thread starvation across instances and allowing the engine to maintain a flat, scale-agnostic
@@ -527,73 +535,109 @@ settled signal map into the contracts `EnrollmentDecisionEvent` for publishing.
 
 ### Decision outbox and dispatch relay
 
-> Target design, not yet implemented. The decisions exchange (§Exchange and queue topology) and the
-> timeout poller (ADR-15) are in place; the relay below is the planned emission mechanism. The
-> rationale — why commit-then-publish, and why the correlation row is the outbox — is in ADR-17.
+> Implemented (`DecisionDispatcher`, with the after-commit eager trigger registered by
+> `EnrollmentService.finalizeDecision` and the scheduled backstop running as the dispatch phase of
+> `EnrollmentSweepJob`). The rationale — why commit-then-publish, and why the correlation row is the
+> outbox — is in ADR-17; the single-marker, eager-trigger, and single-sweep decisions below are
+> recorded in ADR-17 §Amendment.
 
 Deciding and dispatching are separated and ordered commit-then-publish, with the correlation record
 itself serving as the transactional outbox. No separate outbox table is introduced.
 
 **Decide — under the row lock, by whichever component completes the row.** The result handler or the
-timeout poller settles its signal, evaluates the completion predicate (§Correlation Record Domain
-Model), and if complete computes the decision (ADR-14) and writes the decision payload plus
-`ready_for_dispatch_at = now()` onto the row, then commits. Neither component publishes.
+sweep's timeout phase settles its signal, evaluates the completion predicate (§Correlation Record Domain
+Model), and if complete computes the decision (ADR-14) and writes the decision payload — including
+the frozen `decision_id` and `decided_at` — onto the row, then commits. Neither component publishes;
+the decide step registers the eager dispatch trigger for after its commit.
 
 ```
-finalizeIfComplete(row):                 -- shared by handler and timeout poller, under the row lock
+finalizeIfComplete(row):                 -- shared by handler and timeout phase, under the row lock
   if completionPredicate(row.signals):
-      row.decision              := aggregate(row.signals)   -- ADR-14
-      row.ready_for_dispatch_at := now()
+      row.decision    := aggregate(row.signals)   -- ADR-14
+      row.decision_id := fresh UUID               -- frozen here; every publish replays it
+      row.decided_at  := now()
+      register afterCommit → dispatch(row)        -- eager trigger; fires once the commit is durable
   -- COMMIT;  (handler only) ACK the inbound result message
 ```
 
-**Dispatch — out of band, by the relay.** A `@Scheduled` relay (`DecisionDispatchJob`) claims
-decided-but-undispatched rows, publishes, and stamps `dispatched_at` only after the publisher confirm
-returns.
+**Dispatch — one shared path (`DecisionDispatcher`), two triggers.** The after-commit hook
+dispatches eagerly (milliseconds after the decide commit, off the row lock; failures are logged,
+never rethrown — the commit is already durable). The dispatch phase of the `@Scheduled`
+`EnrollmentSweepJob` sweeps decided-but-undispatched rows on a loose interval as the durability
+backstop: it only finds work after an eager publish failed or a crash hit the commit-to-publish gap.
+Both publish, await the publisher confirm, and only then stamp `dispatched_at`.
 
 ```
 claim = SELECT * FROM correlation
-        WHERE ready_for_dispatch_at IS NOT NULL AND dispatched_at IS NULL
-        ORDER BY ready_for_dispatch_at
+        WHERE decision_result IS NOT NULL AND dispatched_at IS NULL
+        ORDER BY decided_at
         FOR UPDATE SKIP LOCKED
         LIMIT batch
 for row in claim:
-    publish EnrollmentDecisionEvent(row.decision)   -- Publisher Confirms
+    publish EnrollmentDecisionEvent(row.decision)   -- Publisher Confirms; replays row.decision_id
     await confirm
-    UPDATE correlation SET dispatched_at = now() WHERE id = row.id
+    UPDATE correlation SET dispatched_at = now()
+     WHERE id = row.id AND dispatched_at IS NULL    -- guard: eager and relay cannot double-stamp
 ```
 
 **Markers on the correlation row.**
 
-- `decision` — the aggregated `DecisionResult` (outcome + reason code), frozen when the row goes
-  terminal; never recomputed.
-- `ready_for_dispatch_at` — set in the decide transaction; predicate "decided, awaiting publication."
-  Carried as a timestamp so `dispatched_at − ready_for_dispatch_at` is dispatch latency and
-  `now() − ready_for_dispatch_at > threshold AND dispatched_at IS NULL` is the stuck-outbox alert. May
-  be folded into a `status` enum if one exists.
-- `dispatched_at` — set after the publisher confirm; predicate "delivered to the broker."
+- `decision_result` / `decision_id` — the aggregated decision and its published identity, frozen in
+  the decide transaction; never recomputed. `decision_id` is the consumer-side dedup key.
+- `decided_at` — set in the same UPDATE; doubles as the outbox-ready marker (the sketched
+  `ready_for_dispatch_at` was folded into it — same transaction, same information, ADR-17
+  §Amendment). `dispatched_at − decided_at` is dispatch latency;
+  `now() − decided_at > threshold AND dispatched_at IS NULL` is the stuck-outbox alert.
+- `dispatched_at` — set after the publisher confirm; predicate "delivered to the broker." Guarded
+  (`IS NULL`) so the two triggers racing on one row produce at most a byte-identical duplicate,
+  never a double-stamp.
 
 **Ordering rule.** Publish → await confirm → stamp `dispatched_at`. Never stamp before the confirm: a
 nacked publish would otherwise look delivered and the row would never be re-claimed, losing the
 decision.
 
 **Retention ordering.** Any cleanup of terminal rows deletes only rows with `dispatched_at IS NOT
-NULL`, never a row in the `ready_for_dispatch_at NOT NULL, dispatched_at NULL` outbox state, which is
-the relay's durable work item.
+NULL`, never a row in the `decision_result NOT NULL, dispatched_at NULL` outbox state, which is
+the dispatch phase's durable work item.
 
 **Crash-window recovery.**
 
 | Crash point | State after crash | Recovery |
 |---|---|---|
-| Before the decide-commit | signal write and `ready_for_dispatch_at` both roll back | inbound result redelivers (handler) or the row stays `PENDING` (timeout poller); nothing was emitted |
-| After decide-commit, before publish | `ready_for_dispatch_at NOT NULL, dispatched_at NULL` | relay re-claims next tick and publishes |
-| After publish, before `dispatched_at` | message on broker, `dispatched_at` NULL | relay re-claims and re-publishes; duplicate absorbed by consumer idempotency |
+| Before the decide-commit | signal write and decision both roll back | inbound result redelivers (handler) or the row stays `PENDING` (timeout phase); nothing was emitted |
+| After decide-commit, before publish | `decision_result NOT NULL, dispatched_at NULL` | the sweep's dispatch phase re-claims next tick and publishes |
+| After publish, before `dispatched_at` | message on broker, `dispatched_at` NULL | the sweep's dispatch phase re-claims and re-publishes; duplicate absorbed by consumer idempotency |
 
-In every case the relay re-reads the frozen `decision` and never recomputes, so recovery yields only
-byte-identical duplicates.
+In every case dispatch re-reads the frozen `decision_result` / `decision_id` and never recomputes,
+so recovery yields only byte-identical duplicates — which is what makes `decisionId` a valid
+consumer-side dedup key.
 
-**Configuration.** `dispatch-poll-interval` and `dispatch-batch-size` tune the relay; the claim query
-is a single indexed scan on a tight `fixedDelay`. A regression test pins the no-recompute property.
+**One sweep, two phases.** The dispatch backstop is not a job of its own: it runs as the second
+phase of `EnrollmentSweepJob`, after the timeout-finalize phase (ADR-15). Because the eager trigger
+owns steady-state delivery latency, the backstop is latency-insensitive — the same loose class as
+timeout detection — so both share one `@Scheduled` cadence. The phases keep separate transactions
+(each a distinct `@Transactional` service call per batch) and are contained independently, so a
+broker outage in the dispatch phase does not block timeout processing and a DB hiccup in the timeout
+phase does not skip the dispatch backstop. Timeouts run first so a row decided this tick can be
+backstopped in the same tick. This merge is valid *because* eager dispatch exists; removing it would
+make the backstop latency-sensitive again and warrant splitting it back onto its own schedule.
+
+**Two claim queries, not one.** Sharing a job does not mean sharing a query. The timeout claim
+(`decision_result IS NULL AND timeout_at <= now`) and the dispatch claim (`decision_result IS NOT
+NULL AND dispatched_at IS NULL`) select disjoint rows — undecided versus decided — so there is
+nothing to collapse: they already scan different rows through different partial indexes
+(`idx_enrollments_timeout_undecided`, `idx_enrollments_undispatched`) and sort differently
+(oldest-deadline versus oldest-decided). A single `OR` claim was rejected because it would lock both
+populations in one transaction — dragging network-bound publishing back into the DB-only finalize
+transaction and re-coupling the failure domains — and because one `LIMIT` would let one phase's
+backlog starve the other. The rationale is in ADR-17 §Amendment.
+
+**Configuration.** `decision-engine.sweep.interval` and `.batch-size` tune the sweep; the interval
+is the shared cadence (default 10s, the tighter timeout requirement), not delivery latency — the
+eager trigger owns the steady state, so the dispatch phase is a single probe of the (almost always
+empty) partial index. `EnrollmentSweepIT` covers both phases against real infrastructure and pins
+the no-recompute property — the routine proof of the recovery path, which the eager trigger
+otherwise leaves cold.
 
 ### Operational metrics
 

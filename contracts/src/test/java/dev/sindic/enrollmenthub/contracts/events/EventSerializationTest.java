@@ -2,6 +2,7 @@ package dev.sindic.enrollmenthub.contracts.events;
 
 import dev.sindic.enrollmenthub.contracts.domain.Address;
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
+import dev.sindic.enrollmenthub.contracts.domain.EnrollmentSnapshot;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
 import tools.jackson.databind.DeserializationFeature;
@@ -34,6 +35,10 @@ class EventSerializationTest {
 
     private static EnrollmentData enrollmentData(PaymentType paymentType) {
         return new EnrollmentData(UUID.randomUUID(), paymentType, person(), address("DE"), address("DE"));
+    }
+
+    private static EnrollmentSnapshot enrollmentSnapshot(PaymentType paymentType) {
+        return new EnrollmentSnapshot(paymentType, person(), address("DE"), address("DE"));
     }
 
     private static final Instant FIXED_CREATED_AT = Instant.parse("2026-05-23T10:00:00Z");
@@ -236,7 +241,7 @@ class EventSerializationTest {
         var signals = Map.of(
                 "FRAUD_CHECK", new EnrollmentSignal(SignalOutcome.OK, null, null),
                 "GEO_SCORE",   new EnrollmentSignal(null, RiskLevel.LOW, null));
-        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentData(PaymentType.CREDIT_CARD),
+        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentSnapshot(PaymentType.CREDIT_CARD),
                 DecisionResult.APPROVED, signals, now);
         var json = mapper.writeValueAsString(original);
         var deserialized = mapper.readValue(json, EnrollmentDecisionEvent.class);
@@ -247,7 +252,7 @@ class EventSerializationTest {
     void enrollmentDecisionEvent_rejected_roundTrip() throws Exception {
         var now = Instant.now();
         var signals = Map.of("FRAUD_CHECK", new EnrollmentSignal(SignalOutcome.FAILED, null, null));
-        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentData(PaymentType.CREDIT_CARD),
+        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentSnapshot(PaymentType.CREDIT_CARD),
                 DecisionResult.REJECTED, signals, now);
         var json = mapper.writeValueAsString(original);
         var deserialized = mapper.readValue(json, EnrollmentDecisionEvent.class);
@@ -260,7 +265,7 @@ class EventSerializationTest {
         var signals = Map.of(
                 "FRAUD_CHECK", new EnrollmentSignal(SignalOutcome.OK, null, null),
                 "GEO_SCORE",   new EnrollmentSignal(null, RiskLevel.HIGH, null));
-        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentData(PaymentType.CREDIT_CARD),
+        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentSnapshot(PaymentType.CREDIT_CARD),
                 DecisionResult.CONDITIONAL_APPROVED, signals, now);
         var json = mapper.writeValueAsString(original);
         var deserialized = mapper.readValue(json, EnrollmentDecisionEvent.class);
@@ -270,7 +275,7 @@ class EventSerializationTest {
     @Test
     void enrollmentDecisionEvent_signalWithTimeout_roundTrip() throws Exception {
         var signals = Map.of("GEO_SCORE", new EnrollmentSignal(null, null, "timeout"));
-        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentData(PaymentType.INVOICE),
+        var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentSnapshot(PaymentType.INVOICE),
                 DecisionResult.APPROVED, signals, Instant.now());
         var json = mapper.writeValueAsString(original);
         var deserialized = mapper.readValue(json, EnrollmentDecisionEvent.class);
@@ -278,9 +283,23 @@ class EventSerializationTest {
     }
 
     @Test
+    void enrollmentDecisionEvent_json_carriesNoEnrollmentId() throws Exception {
+        // ADR-17 dedup-key decision: the decision event identifies itself by decisionId only;
+        // the correlation enrollmentId is the decision-engine's internal primary key and does
+        // not appear anywhere in the serialized payload.
+        var original = new EnrollmentDecisionEvent(UUID.randomUUID(),
+                enrollmentSnapshot(PaymentType.CREDIT_CARD),
+                DecisionResult.APPROVED,
+                Map.of("FRAUD_CHECK", new EnrollmentSignal(SignalOutcome.OK, null, null)),
+                Instant.now());
+        var json = mapper.writeValueAsString(original);
+        assertFalse(json.contains("enrollmentId"), "decision event must not carry the correlation id");
+    }
+
+    @Test
     void enrollmentDecisionEvent_nullDecisionId_throws() {
         assertThrows(NullPointerException.class, () -> new EnrollmentDecisionEvent(
-                null, enrollmentData(PaymentType.CREDIT_CARD), DecisionResult.APPROVED, Map.of(), Instant.now()));
+                null, enrollmentSnapshot(PaymentType.CREDIT_CARD), DecisionResult.APPROVED, Map.of(), Instant.now()));
     }
 
     @Test
@@ -292,18 +311,18 @@ class EventSerializationTest {
     @Test
     void enrollmentDecisionEvent_nullDecisionResult_throws() {
         assertThrows(NullPointerException.class, () -> new EnrollmentDecisionEvent(
-                UUID.randomUUID(), enrollmentData(PaymentType.CREDIT_CARD), null, Map.of(), Instant.now()));
+                UUID.randomUUID(), enrollmentSnapshot(PaymentType.CREDIT_CARD), null, Map.of(), Instant.now()));
     }
 
     @Test
     void enrollmentDecisionEvent_nullSignals_throws() {
         assertThrows(NullPointerException.class, () -> new EnrollmentDecisionEvent(
-                UUID.randomUUID(), enrollmentData(PaymentType.CREDIT_CARD), DecisionResult.APPROVED, null, Instant.now()));
+                UUID.randomUUID(), enrollmentSnapshot(PaymentType.CREDIT_CARD), DecisionResult.APPROVED, null, Instant.now()));
     }
 
     @Test
     void enrollmentDecisionEvent_nullDecidedAt_throws() {
         assertThrows(NullPointerException.class, () -> new EnrollmentDecisionEvent(
-                UUID.randomUUID(), enrollmentData(PaymentType.CREDIT_CARD), DecisionResult.APPROVED, Map.of(), null));
+                UUID.randomUUID(), enrollmentSnapshot(PaymentType.CREDIT_CARD), DecisionResult.APPROVED, Map.of(), null));
     }
 }
