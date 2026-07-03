@@ -1,0 +1,30 @@
+version: 2
+updates:
+
+  # ── npm packages in .github/ (tsx, esbuild, future CI scripts) ──────────────
+  - package-ecosystem: npm
+    directory: /.github
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+    open-pull-requests-limit: 5
+
+  # ── Maven (Spring Boot parent + library dependencies, all modules) ──────────
+  # Scans the root pom; the reactor's child modules are picked up from there.
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+    open-pull-requests-limit: 5
+
+  # ── GitHub Actions (checkout, setup-java, setup-node, paths-filter, etc.) ───
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+    open-pull-requests-limit: 5
