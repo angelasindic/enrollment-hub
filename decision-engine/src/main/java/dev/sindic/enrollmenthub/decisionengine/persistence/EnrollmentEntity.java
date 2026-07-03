@@ -1,10 +1,21 @@
 package dev.sindic.enrollmenthub.decisionengine.persistence;
 
-import dev.sindic.enrollmenthub.decisionengine.domain.*;
-import jakarta.persistence.*;
-import lombok.Getter;
+import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
+import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
+import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentProcess;
+import dev.sindic.enrollmenthub.decisionengine.domain.IntakeStatus;
+import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.Map;
@@ -71,6 +82,9 @@ public class EnrollmentEntity {
     @Column(name = "decided_at")
     private Instant decidedAt;
 
+    @Column(name = "dispatched_at")
+    private Instant dispatchedAt;
+
     protected EnrollmentEntity() {}
 
     private EnrollmentEntity(UUID enrollmentId,
@@ -124,4 +138,5 @@ public class EnrollmentEntity {
     public Instant getCreatedAt()            { return createdAt; }
     public Instant getTimeoutAt()            { return timeoutAt; }
     public Instant getDecidedAt()            { return decidedAt; }
+    public Instant getDispatchedAt()         { return dispatchedAt; }
 }

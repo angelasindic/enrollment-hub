@@ -1,7 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine.amqp;
 
 import dev.sindic.enrollmenthub.contracts.domain.Address;
-import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
+import dev.sindic.enrollmenthub.contracts.domain.EnrollmentSnapshot;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
 import dev.sindic.enrollmenthub.contracts.events.DecisionResult;
@@ -94,13 +94,13 @@ class EnrollmentDecisionPublisherIT extends BaseIntegrationTest {
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     private static EnrollmentDecisionEvent sampleDecisionEvent() {
-        var person  = new Person("Ada", "Lovelace", "ada@example.com", "+49123");
-        var address = new Address(List.of("1 Main St"), "10115", "Berlin", "BE", "DE");
-        var data    = new EnrollmentData(UUID.randomUUID(), PaymentType.CREDIT_CARD, person, address, address);
+        var person   = new Person("Ada", "Lovelace", "ada@example.com", "+49123");
+        var address  = new Address(List.of("1 Main St"), "10115", "Berlin", "BE", "DE");
+        var snapshot = new EnrollmentSnapshot(PaymentType.CREDIT_CARD, person, address, address);
 
         return new EnrollmentDecisionEvent(
                 UUID.randomUUID(),
-                data,
+                snapshot,
                 DecisionResult.APPROVED,
                 Map.of(
                         "GEO_SCORE",   new EnrollmentSignal(null, RiskLevel.LOW, null),

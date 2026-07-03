@@ -66,3 +66,5 @@ The poller claims expired rows with `SELECT FOR UPDATE SKIP LOCKED`. The WAIT-ve
 **Gains.** Timeout state is fully observable: in-flight requests, timed-out signals, and pending transitions are all queryable from the correlation table with no broker-side inspection, and no extra RabbitMQ topology is required.
 
 **Costs.** Fail-open creates a bounded fraud-exposure window during signal-service outages, documented and accepted at current volume. DB polling adds a scheduler dependency, and the polling interval is a tunable: too long and `PENDING` rows sit past their deadline, delaying when the decision is recorded and dispatched (ADR-17).
+
+> **Implementation note.** The scheduler is shared: timeout detection is the first phase of `EnrollmentSweepJob`, whose second phase is the ADR-17 dispatch backstop. Both are periodic `SKIP LOCKED` batch drains with loose latency tolerance, so they run as one scheduled sweep on one cadence (`decision-engine.sweep.interval`); the phases keep separate per-batch transactions and are contained independently. Rationale in ADR-17 §Amendment.

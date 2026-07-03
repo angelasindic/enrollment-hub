@@ -1,6 +1,6 @@
 package dev.sindic.enrollmenthub.contracts.events;
 
-import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
+import dev.sindic.enrollmenthub.contracts.domain.EnrollmentSnapshot;
 
 import java.time.Instant;
 import java.util.Map;
@@ -10,18 +10,17 @@ import java.util.UUID;
 /**
  * Published by the decision engine after all applicable signals have settled.
  *
- * <p>{@code decisionId} is a freshly generated UUID — the internal correlation
- * {@code enrollmentId} (the DB primary key) is intentionally not exposed.
- *
- * <p>{@code originalRequest} carries the full enrollment data as submitted at
- * intake. Downstream consumers receive it as a clean nested JSON object.
+ * <p>{@code decisionId} is generated once and frozen when the decision is persisted (ADR-17);
+ * redeliveries carry the same id, so it is the consumer-side idempotency key. The internal
+ * correlation {@code enrollmentId} (the DB primary key) is intentionally not exposed —
+ * {@code originalRequest} is an {@link EnrollmentSnapshot}, not the id-carrying intake payload.
  *
  * <p>{@code signals} is keyed by signal name (e.g. {@code "GEO_SCORE"},
  * {@code "FRAUD_CHECK"}).
  */
 public record EnrollmentDecisionEvent(
         UUID decisionId,
-        EnrollmentData originalRequest,
+        EnrollmentSnapshot originalRequest,
         DecisionResult decisionResult,
         Map<String, EnrollmentSignal> signals,
         Instant decidedAt

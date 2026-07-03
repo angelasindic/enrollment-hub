@@ -1,6 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
-import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentDecisionPublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionEngine;
 import dev.sindic.enrollmenthub.decisionengine.domain.GateClassification;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
@@ -13,6 +12,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
@@ -38,16 +39,17 @@ import java.util.UUID;
  *       {@code EnrollmentProcess.withSignalResult(...)}.</li>
  *   <li>Persist via explicit {@code UPDATE} (ADR-16 §Write path) — no dirty-tracking on
  *       the JSONB column.</li>
- *   <li>If all applicable signals are settled, evaluate the decision, persist
- *       it (also via explicit {@code UPDATE}), and publish
- *       {@code EnrollmentDecisionEvent} — all inside the same locked transaction.</li>
+ *   <li>If all applicable signals are settled, evaluate the decision and persist
+ *       it (also via explicit {@code UPDATE}) — deciding only; no publish inside
+ *       the locked transaction.</li>
  * </ol>
  *
- * <p>Publish-inside-transaction is intentional per ADR-16: if the publish
- * throws, the transaction rolls back and the inbound AMQP message is retried,
- * which re-acquires the lock and observes the now-uncommitted state as
- * still-PENDING. Downstream consumers handle the at-least-once delivery
- * window via {@code decisionId} dedup (ADR-13 §Delivery & Concurrency Guarantees).
+ * <p>Emission is separated from deciding per ADR-17 (commit-then-publish): the decision —
+ * including its frozen {@code decisionId} — is durable at commit, and {@link #finalizeDecision}
+ * registers an after-commit hook that triggers the eager dispatch via {@link DecisionDispatcher}.
+ * If the eager publish fails, the row stays in the outbox state ({@code decision_result NOT NULL,
+ * dispatched_at NULL}) and the {@link EnrollmentSweepJob} dispatch phase re-publishes it — always
+ * the same persisted decision, so downstream {@code decisionId} dedup holds across every retry.
  *
  * @see EnrollmentIntakeService synchronous intake counterpart
  */
@@ -56,20 +58,18 @@ import java.util.UUID;
 public class EnrollmentService {
 
     private final EnrollmentRepository repository;
-    private final EnrollmentDecisionPublisher publisher;
-    private final DecisionEventMapper decisionEventMapper;
+    private final DecisionDispatcher dispatcher;
     private final JsonMapper jsonMapper;
     private final Clock clock;
 
     EnrollmentService(EnrollmentRepository repository,
-                      EnrollmentDecisionPublisher publisher,
+                      DecisionDispatcher dispatcher,
                       JsonMapper jsonMapper,
                       Clock clock) {
         this.repository = repository;
-        this.publisher = publisher;
+        this.dispatcher = dispatcher;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
-        this.decisionEventMapper = new DecisionEventMapper(jsonMapper);
     }
 
     @Transactional
@@ -128,11 +128,12 @@ public class EnrollmentService {
     }
 
     /**
-     * Shared terminal step (ADR-16 §finalize). Given a fully-settled signal map for a row already
-     * locked {@code PESSIMISTIC_WRITE} by the caller, evaluate the decision, persist it via the
-     * single-statement completion (guarded by {@code decision_result IS NULL}), and publish the
-     * {@code EnrollmentDecisionEvent}. The publish runs inside the caller's transaction: a publish
-     * failure rolls the decision back and the work is retried (result redelivery or the next poll).
+     * Shared terminal step (ADR-16 §finalize, ADR-17 decide half). Given a fully-settled signal
+     * map for a row already locked {@code PESSIMISTIC_WRITE} by the caller, evaluate the decision
+     * and persist it — decision result, frozen {@code decisionId}, {@code decidedAt} — via the
+     * single-statement completion (guarded by {@code decision_result IS NULL}). No publish happens
+     * here: the after-commit hook registered below triggers the eager dispatch once the decision
+     * is durable, and the relay covers the case where that eager dispatch fails.
      *
      * <p>Precondition: the caller holds the row lock and every signal in {@code settledSignals}
      * has reached a terminal state.
@@ -148,14 +149,34 @@ public class EnrollmentService {
                 decision.decision().name(), decisionId, decidedAt);
         if (rows != 1) {
             // The decision_result IS NULL guard rejected — another path already completed this
-            // row under our lock (structurally impossible, but if it happens we must not double-publish).
-            log.warn("completeWithDecision affected {} rows for enrollmentId={}; decision not published",
+            // row under our lock (structurally impossible, but if it happens we must not dispatch).
+            log.warn("completeWithDecision affected {} rows for enrollmentId={}; dispatch not registered",
                     rows, enrollmentId);
             return;
         }
 
-        publisher.publish(decisionEventMapper.buildDecisionEvent(
-                entity, settledSignals, decision, decisionId, decidedAt));
+        registerEagerDispatch(enrollmentId);
+    }
+
+    /**
+     * Registers the eager half of the ADR-17 emission model: once the surrounding decide
+     * transaction commits, {@link DecisionDispatcher#dispatchNow} publishes the just-persisted
+     * decision. The hook swallows failures by design — the commit is already durable, a throw
+     * from afterCommit would nack a correctly-processed message, and re-delivery is the
+     * {@link EnrollmentSweepJob} dispatch phase's job, not the inbound message's.
+     */
+    private void registerEagerDispatch(UUID enrollmentId) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    dispatcher.dispatchNow(enrollmentId);
+                } catch (RuntimeException ex) {
+                    log.warn("Eager decision dispatch failed for enrollmentId={}; "
+                            + "the dispatch relay will re-publish", enrollmentId, ex);
+                }
+            }
+        });
     }
 
     /**

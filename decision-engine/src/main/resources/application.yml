@@ -84,11 +84,15 @@ logging:
 decision-engine:
   scatter-gather:
     timeout: 1m
-  timeout-poller:
-    # Fixed delay between poll passes (ADR-15). Also consumed by the @Scheduled annotation
-    # on TimeoutPoller via this property key.
-    interval: ${DECISION_ENGINE_TIMEOUT_POLLER_INTERVAL:10s}
-    # Rows claimed per poll transaction; small batches bound row-lock duration.
-    batch-size: ${DECISION_ENGINE_TIMEOUT_POLLER_BATCH_SIZE:100}
+  sweep:
+    # Single background sweep (EnrollmentSweepJob). Two phases per tick: finalize expired-and-undecided
+    # rows (ADR-15 timeout policy), then dispatch decided-but-undispatched rows (ADR-17 outbox backstop).
+    # One cadence drives both: timeout detection wants promptness, and the dispatch phase is a loose
+    # backstop because the after-commit eager dispatch owns steady-state delivery latency — so the
+    # tighter timeout cadence satisfies both.
+    interval: ${DECISION_ENGINE_SWEEP_INTERVAL:10s}
+    # Rows claimed per phase transaction; small batches bound row-lock duration and the duplicate
+    # blast radius of a mid-batch publish failure in the dispatch phase.
+    batch-size: ${DECISION_ENGINE_SWEEP_BATCH_SIZE:100}
   amqp:
     confirm-timeout: ${DECISION_ENGINE_AMQP_CONFIRM_TIMEOUT:5s}

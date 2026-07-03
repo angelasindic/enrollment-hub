@@ -7,13 +7,10 @@ import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentIntakePublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.PendingEnrollmentResponse;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
-import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
@@ -24,37 +21,29 @@ import java.time.Instant;
  * Service handling enrollment flow.
  *
  * <p>The {@code originalRequest} is serialised to a JSON string once at intake
- * and stored verbatim in the correlation record. The same string is forwarded
- * inline in {@code EnrollmentDecisionEvent} via {@code @JsonRawValue}, so
- * downstream consumers receive a clean nested object regardless of any future
- * changes to {@link EnrollmentData}.
+ * and stored verbatim in the correlation record. At decision time it is mapped
+ * into the {@code EnrollmentSnapshot} embedded in {@code EnrollmentDecisionEvent}
+ * — without the correlation {@code enrollmentId}, which never leaves the service
+ * (ADR-17 §Amendment).
  */
 @Service
 @Slf4j
 public class EnrollmentIntakeService {
 
-    private final EnrollmentRepository repository;
     private final EnrollmentCorrelationService correlationService;
     private final EnrollmentIntakePublisher intakePublisher;
     private final CheckRequestPublisher checkRequestPublisher;
-    private final JsonMapper jsonMapper;
     private final Clock clock;
-    private final Duration timeout;
 
-    public EnrollmentIntakeService(EnrollmentRepository repository,
-                                   EnrollmentCorrelationService correlationService,
-                                   EnrollmentIntakePublisher intakePublisher,
+    public EnrollmentIntakeService(
+            EnrollmentCorrelationService correlationService,
+            EnrollmentIntakePublisher intakePublisher,
                                    CheckRequestPublisher checkRequestPublisher,
-                                   JsonMapper jsonMapper,
-                                   Clock clock,
-                                   @Value("${decision-engine.scatter-gather.timeout}") Duration timeout) {
-        this.repository = repository;
+                                   Clock clock) {
         this.correlationService = correlationService;
         this.intakePublisher = intakePublisher;
         this.checkRequestPublisher = checkRequestPublisher;
-        this.jsonMapper = jsonMapper;
         this.clock = clock;
-        this.timeout = timeout;
     }
 
     /**
