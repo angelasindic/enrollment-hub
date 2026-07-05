@@ -1,0 +1,35 @@
+# Prometheus scrape configuration for the local stack (otel-local/docker-compose.yml).
+#
+# Metrics take the pull path: Prometheus scrapes each service's /actuator/prometheus
+# endpoint (Micrometer Prometheus registry). Traces and logs take the separate OTLP
+# push path through the OTel Collector (architecture.md §8.3).
+#
+# The Spring Boot services run on the HOST, not inside compose, so targets use
+# host.docker.internal (mapped via extra_hosts for Linux compatibility).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: enrollment-hub
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [ 'host.docker.internal:8079' ]
+        labels:
+          application: gateway
+      - targets: [ 'host.docker.internal:9000' ]
+        labels:
+          application: authorization-server
+      - targets: [ 'host.docker.internal:8080' ]
+        labels:
+          application: decision-engine
+      - targets: [ 'host.docker.internal:8081' ]
+        labels:
+          application: geo-scoring
+      - targets: [ 'host.docker.internal:8082' ]
+        labels:
+          application: fraud-detection

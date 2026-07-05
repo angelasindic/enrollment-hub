@@ -641,22 +641,31 @@ otherwise leaves cold.
 
 ### Operational metrics
 
-Two metrics on the intake path are worth wiring into the dashboard from day one.
-The first, `enrollment_intake_publish_failures_total`, increments whenever the
-post-commit dispatch of the check commands throws. A non-zero value means the
-broker redelivery path is being exercised — the correlation record was committed
-but the downstream publish failed and the intake message was nacked for retry.
-This is recoverable in steady state but indicates broker instability or a
-downstream binding problem if it is sustained. The second is the depth of
-`enrollment.intake.queue.dlq`, which captures intake messages that exhausted
-their retry budget without succeeding. A non-zero depth here means an intake
-message could not be processed even after retries and requires manual inspection.
+Three signals are wired into the Prometheus rules (`monitoring/prometheus/rules/`), each backing
+one of this document's guarantees.
 
-These two metrics together cover the residual orphan-record window described in
-architecture document §8: a correlation record exists but the check commands
-were not dispatched. Either the metric is non-zero (post-commit publish failed) or
-the intake DLQ has a message (retry budget exhausted). If both are zero, no
-orphan records exist.
+The first, `decisionengine_publish_failures_total` (tagged `reason=nack|returned`), increments
+whenever a publisher confirm fails on any decision-engine publish — a broker nack or an
+unroutable return under mandatory publishing. It does not count every dispatch failure: a
+connection loss during the check-command dispatch throws without a confirm callback, nacks the
+intake message, and surfaces through broker redelivery instead. Sustained increments indicate
+broker instability or a missing binding (`DecisionPublishFailures` alert).
+
+The second is DLQ depth, `rabbitmq_dlq_depth` (tagged by `queue`, gauged in
+`RabbitDlqMetricsConfig`), which captures messages that exhausted their retry budget — or were
+fast-routed on a non-retryable failure — without succeeding. Non-zero depth requires manual
+inspection (`DlqNonEmpty` alert; procedure in `docs/runbook-dlq-replay.md`).
+
+Together these cover the residual orphan-record window described in architecture document §8:
+a correlation record exists but the check commands were not dispatched. A confirm-level failure
+shows on the counter; every other dispatch failure ends, after redelivery, either in success or
+on the intake DLQ. If the counter is flat and the DLQs are empty, no orphan records exist.
+
+The third is the ADR-17 outbox signal, `decisionengine_outbox_oldest_age_seconds`
+(`OutboxMetricsConfig`) — the age of the oldest decided-but-undispatched row. Zero in steady
+state (the eager dispatch drains the outbox within milliseconds); growth means both emission
+triggers are failing and fires `StuckDecisionOutbox` before downstream consumers notice missing
+decisions.
 
 ### Security
 

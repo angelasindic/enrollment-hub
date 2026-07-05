@@ -226,6 +226,21 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                        @Param("dispatchedAt") Instant dispatchedAt);
 
     /**
+     * Oldest decide-commit timestamp among rows still awaiting dispatch (the ADR-17 outbox
+     * state: {@code decision_result NOT NULL AND dispatched_at IS NULL}). Empty when the
+     * outbox is drained — the steady state, since the eager after-commit dispatch stamps rows
+     * within milliseconds. Feeds the {@code decisionengine.outbox.oldest.age} gauge behind
+     * the {@code StuckDecisionOutbox} alert; served by the same partial index as
+     * {@link #claimUndispatched} ({@code idx_enrollments_undispatched}).
+     */
+    @Query("""
+            SELECT MIN(r.decidedAt) FROM EnrollmentEntity r
+             WHERE r.decisionResult IS NOT NULL
+               AND r.dispatchedAt IS NULL
+            """)
+    Optional<Instant> findOldestUndispatchedDecidedAt();
+
+    /**
      * Read-only counterpart to {@link #claimPendingTimeouts(Instant, Pageable)}.
      * Returns every expired-and-undecided row without acquiring any lock; suitable
      * for diagnostics, dashboards, and tests that need to observe table state.

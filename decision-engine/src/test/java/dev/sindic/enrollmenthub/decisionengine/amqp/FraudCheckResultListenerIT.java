@@ -72,36 +72,56 @@ class FraudCheckResultListenerIT extends BaseIntegrationTest {
     void fraudAsLastSignal_triggersDecisionEngine() {
         var enrollmentId = UUID.randomUUID();
 
+        // Non-exclusive, non-auto-delete: awaitDecisionFor subscribes and cancels repeatedly
+        // while draining, which would delete an auto-delete queue mid-drain.
         var captureQueueName = "test.decision.capture.fraud." + enrollmentId;
-        amqpAdmin.declareQueue(new Queue(captureQueueName, false, true, true));
+        amqpAdmin.declareQueue(new Queue(captureQueueName, false, false, false));
         amqpAdmin.declareBinding(new Binding(captureQueueName, Binding.DestinationType.QUEUE,
                 AmqpConfig.DECISION_EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, null));
+        try {
+            txTemplate.executeWithoutResult(status -> {
+                var entity = repository.saveAndFlush(
+                        TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60)));
+                // Seed GEO_SCORE as already-settled; the incoming FraudCheckResult then completes the row.
+                var seedSignals = new EnumMap<>(entity.getSignals());
+                seedSignals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+                repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(seedSignals));
+            });
 
-        txTemplate.executeWithoutResult(status -> {
-            var entity = repository.saveAndFlush(
-                    TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60)));
-            // Seed GEO_SCORE as already-settled; the incoming FraudCheckResult then completes the row.
-            var seedSignals = new EnumMap<>(entity.getSignals());
-            seedSignals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(seedSignals));
-        });
+            rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.FRAUD_CHECK_KEY,
+                    new FraudCheckResult(enrollmentId, C_OK));
 
-        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.FRAUD_CHECK_KEY,
-                new FraudCheckResult(enrollmentId, C_OK));
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var entity = repository.findById(enrollmentId).orElseThrow();
+                assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
+                assertThat(entity.getDecidedAt()).isNotNull();
+            });
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var entity = repository.findById(enrollmentId).orElseThrow();
-            assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
-            assertThat(entity.getDecidedAt()).isNotNull();
-        });
+            // The decisions exchange is shared: the background sweep may finalize other suites'
+            // expired rows and publish their (timeout-FAILED) decisions into this capture queue.
+            // Match on this row's persisted decisionId instead of taking the first message.
+            var decisionId = repository.findById(enrollmentId).orElseThrow().getDecisionId();
+            var decision = awaitDecisionFor(captureQueueName, decisionId);
+            assertThat(decision.decisionResult())
+                    .isEqualTo(dev.sindic.enrollmenthub.contracts.events.DecisionResult.APPROVED);
+            assertThat(decision.signals().get("FRAUD_CHECK").outcome())
+                    .isEqualTo(dev.sindic.enrollmenthub.contracts.events.SignalOutcome.OK);
+        } finally {
+            amqpAdmin.deleteQueue(captureQueueName);
+        }
+    }
 
-        var decision = rabbitTemplate.receiveAndConvert(captureQueueName, 2_000,
-                new ParameterizedTypeReference<EnrollmentDecisionEvent>() {});
-        assertThat(decision).isNotNull();
-        assertThat(decision.decisionResult())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.DecisionResult.APPROVED);
-        assertThat(decision.signals().get("FRAUD_CHECK").outcome())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.SignalOutcome.OK);
+    /** Drains the capture queue until the decision carrying {@code decisionId} appears. */
+    private EnrollmentDecisionEvent awaitDecisionFor(String queue, UUID decisionId) {
+        var deadline = Instant.now().plusSeconds(10);
+        while (Instant.now().isBefore(deadline)) {
+            var event = rabbitTemplate.receiveAndConvert(queue, 200,
+                    new ParameterizedTypeReference<EnrollmentDecisionEvent>() {});
+            if (event != null && event.decisionId().equals(decisionId)) {
+                return event;
+            }
+        }
+        throw new AssertionError("No EnrollmentDecisionEvent for decisionId=" + decisionId + " within timeout");
     }
 
     private void seedCreditCardRequest(UUID enrollmentId) {

@@ -1,0 +1,14 @@
+groups:
+  - name: dlq
+    rules:
+      - alert: DlqNonEmpty
+        expr: rabbitmq_dlq_depth > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter queue non-empty: {{ $labels.queue }}"
+          description: >
+            {{ $value }} message(s) have been in {{ $labels.queue }} for more than 5 minutes.
+            Manual inspection and replay or discard is required.
+            See docs/runbook-dlq-replay.md for the procedure.

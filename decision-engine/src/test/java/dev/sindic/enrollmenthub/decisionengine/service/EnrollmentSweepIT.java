@@ -10,6 +10,7 @@ import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AmqpAdmin;
@@ -61,6 +62,7 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
     @Autowired RabbitTemplate rabbitTemplate;
     @Autowired AmqpAdmin amqpAdmin;
     @Autowired JsonMapper jsonMapper;
+    @Autowired MeterRegistry meterRegistry;
 
     private final List<String> declaredQueues = new ArrayList<>();
 
@@ -181,6 +183,28 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
     }
 
     @Test
+    void outboxAgeGauge_tracksTheUndispatchedBacklog() {
+        // The StuckDecisionOutbox alert's source signal: > 0 while a decided row awaits
+        // dispatch, back to 0 once the outbox drains. Seeded 60s in the past so the
+        // second-granularity gauge reads a clearly positive age.
+        bindCaptureQueue(UUID.randomUUID()); // make publishes routable for the drain below
+        var enrollmentId = UUID.randomUUID();
+        seedDecidedUndispatched(enrollmentId, UUID.randomUUID(), Instant.now().minusSeconds(60));
+
+        var gauge = meterRegistry.find(OutboxMetricsConfig.OUTBOX_AGE_METRIC).gauge();
+        assertThat(gauge).isNotNull();
+        assertThat(gauge.value()).isGreaterThanOrEqualTo(59.0);
+
+        // Drain the outbox (this row plus anything other suites left behind).
+        int dispatched;
+        do {
+            dispatched = dispatcher.dispatchPending(50);
+        } while (dispatched > 0);
+
+        assertThat(gauge.value()).isZero();
+    }
+
+    @Test
     void dispatchPhase_markDispatched_guardRejectsASecondStamp() {
         // The dispatched_at IS NULL guard is what makes the eager/backstop race benign:
         // whichever trigger stamps second observes 0 and treats it as "already delivered".
@@ -201,6 +225,10 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
      * and the eager publish leaves behind.
      */
     private void seedDecidedUndispatched(UUID enrollmentId, UUID decisionId) {
+        seedDecidedUndispatched(enrollmentId, decisionId, Instant.now());
+    }
+
+    private void seedDecidedUndispatched(UUID enrollmentId, UUID decisionId, Instant decidedAt) {
         txTemplate.executeWithoutResult(status -> {
             repository.saveAndFlush(TestEntityFactory.creditCard(
                     enrollmentId, Instant.now(), Instant.now().plusSeconds(300)));
@@ -208,7 +236,7 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
             settled.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
             settled.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
             repository.completeWithDecision(enrollmentId,
-                    jsonMapper.writeValueAsString(settled), "APPROVED", decisionId, Instant.now());
+                    jsonMapper.writeValueAsString(settled), "APPROVED", decisionId, decidedAt);
         });
     }
 
