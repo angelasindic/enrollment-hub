@@ -445,3 +445,97 @@ externally emitted reason code — the same fact, internal state versus emitted 
 non-`PENDING` terminal state, and the idempotency guard (ADR-16) discards it without modifying the record. Whether a
 discarded late result should raise a `LateScoreArrived` event, flag the record, or remain visible only via the
 dead-letter queue is an open decision.
+
+---
+
+## 7. Infrastructure & Deployment
+
+### 7.1 Local Stack
+
+The system runs locally as host-run Spring Boot services against two Docker Compose stacks:
+
+**Infrastructure (`docker-compose.yml`):**
+
+- PostgreSQL — decision-engine correlation store and authorization-server persistence
+- RabbitMQ — event bus
+- Redis/Valkey — geo-scoring cache and geo-index
+- Nominatim — self-hosted geocoding (ADR-09)
+- libpostal — address normalization (ADR-10)
+
+**Observability (`otel-local/docker-compose.yml`):**
+
+- OTel Collector, Tempo, Loki — the trace/log pipeline (§8.3)
+- Prometheus — metrics scraping and alert-rule evaluation (`monitoring/prometheus/`)
+- Grafana — single pane across all three signals; datasources provisioned at startup
+
+**Services (host-run):** gateway, authorization-server, decision-engine, geo-scoring, fraud-detection (stub) —
+plus the shared `contracts` library.
+
+### 7.2 Target Environment
+
+Production deployment is vendor-neutral. The target environment provides:
+
+- container orchestration with independent horizontal scaling per service;
+- managed PostgreSQL with automated backups and point-in-time recovery for the correlation store;
+- a managed RabbitMQ-compatible broker with durable queues and dead-letter support (ADR-13);
+- a managed Redis-compatible cache supporting Lua scripting and per-member sorted-set operations (ADR-11);
+- TLS-terminating ingress with health checks, network-level filtering, and DDoS protection;
+- secrets management for connection strings, JWT signing keys, and the geocoding-cache HMAC pepper.
+
+Specific cloud-provider service mappings are out of scope.
+
+### 7.3 Portability Guardrails
+
+Every endpoint is configured by environment variable (`REDIS_HOST`, `DB_HOST`, `RABBITMQ_HOST`, `IDP_JWKS_URI`,
+and so on). Standard Redis AUTH, standard AMQP, no vendor-specific auth mechanisms. The application code is identical
+across environments; only connection strings change.
+
+### 7.4 Single-Instance Components and Production Replication Posture
+
+Local Docker Compose runs single-instance PostgreSQL, RabbitMQ, and Redis. This is intentional for portfolio scope and is
+**not** the production posture. The application is replication-naive: it relies on the broker and database to handle
+failover transparently, so moving from local to production requires no application-code change.
+
+| Component | Local | Production expectation | Failure mode if local posture deployed |
+|---|---|---|---|
+| PostgreSQL (correlation store) | Single instance | Managed Postgres with synchronous replica + PITR backups | All in-flight enrollments lost; idempotency guard cannot recover state from the broker alone |
+| RabbitMQ (event bus) | Single broker | Managed cluster with quorum queues; mirrored DLX | In-flight messages lost on broker failure; Publisher Confirms (ADR-13) detect this and trigger retry, but the publishing process must survive the broker outage |
+| Redis (geo-index + geocoding) | Single instance | Managed Redis with replica + persistence (RDB + AOF) | 48h of geo-index lost; geo-scoring settles without a score → fail-open (`APPROVED_SCORE_MISSING`); no enrollment lost |
+
+---
+
+## 8. Crosscutting Concepts
+
+Concerns that cut across every module. The subsections land with their subject areas; observability arrives with the
+monitoring stack.
+
+### 8.3 Observability
+
+Three signals, two transport paths: traces and logs are **pushed** over OTLP through the OTel Collector; metrics are
+**pulled** — Prometheus scrapes each service's `/actuator/prometheus` endpoint directly and evaluates the alert rules.
+
+| Component | Role |
+|---|---|
+| SLF4J + Logback | Logging facade and implementation. `traceId` and `spanId` are injected into MDC automatically by Micrometer Tracing; every log record carries trace context without manual instrumentation. |
+| Micrometer Tracing + OTel bridge | Spring Boot tracing abstraction (`micrometer-tracing-bridge-otel`) connecting Micrometer's `ObservationRegistry` to the OpenTelemetry SDK. Handles span lifecycle and MDC population. |
+| OpenTelemetry SDK + OTLP export | Exports trace and log signals to the OTel Collector (Spring Boot 4 per-signal export configuration, `management.opentelemetry.<signal>.export.otlp.*`). |
+| OTel Collector | Receives traces and logs over OTLP; routes traces to Tempo and logs to Loki's native OTLP ingestion. |
+| Tempo | Distributed trace storage. |
+| Prometheus | Metrics: scrapes the Micrometer Prometheus registry of all five services; evaluates the alert rules in `monitoring/prometheus/rules/`. Domain metrics include geocoding latency and cache hit rate (geo-scoring), DLQ depth, publish-failure counters, and the outbox age (decision-engine). |
+| Loki | Log storage. Logs arrive from the OTel Collector, not from Promtail or log-file scraping. Correlated to traces in Grafana via `traceId`. |
+| Grafana | Single pane across all three signals; Prometheus/Tempo/Loki datasources are provisioned at startup. Correlates logs and traces by `traceId`. |
+
+**RabbitMQ trace-context propagation.** Micrometer Tracing and the OTel bridge integrate with Spring AMQP via the
+`ObservationRegistry` on both sides of the broker: publishes inject the W3C `traceparent` header into the AMQP message,
+and the `@RabbitListener` container restores the trace context before the handler runs. One enrollment therefore
+produces a single distributed trace spanning HTTP entry, intake publish/consume, the scatter to geo-scoring and
+fraud-detection, the gathered results, and the decision publish — across every queue hop, with no manual header
+handling.
+
+**Alerting.** The Prometheus rules encode the operational contracts the ADRs promise:
+
+| Alert | Condition | Contract it enforces |
+|---|---|---|
+| `DlqNonEmpty` | `rabbitmq_dlq_depth > 0` for 5m | Poison-pill containment ends in ops review, not silent loss (ADR-13); procedure in `docs/runbook-dlq-replay.md` |
+| `DecisionPublishFailures` | any `decisionengine_publish_failures_total` increase in 15m | Publisher Confirms failures are surfaced, not absorbed by retries (ADR-13) |
+| `StuckDecisionOutbox` | `decisionengine_outbox_oldest_age_seconds > 300` for 5m | A decided enrollment is never silently undelivered — the outbox state is observable and alerts before consumers notice (ADR-17) |

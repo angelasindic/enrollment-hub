@@ -111,45 +111,64 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
     void geoScoreAsLastSignal_triggersDecisionEngine() {
         var enrollmentId = UUID.randomUUID();
 
+        // Non-exclusive, non-auto-delete: awaitDecisionFor subscribes and cancels repeatedly
+        // while draining, which would delete an auto-delete queue mid-drain.
         var captureQueueName = "test.decision.capture." + enrollmentId;
-        amqpAdmin.declareQueue(new Queue(captureQueueName, false, true, true));
+        amqpAdmin.declareQueue(new Queue(captureQueueName, false, false, false));
         amqpAdmin.declareBinding(new Binding(captureQueueName, Binding.DestinationType.QUEUE,
                 AmqpConfig.DECISION_EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, null));
+        try {
+            txTemplate.executeWithoutResult(status -> {
+                var entity = repository.saveAndFlush(
+                        TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60)));
+                // Seed FRAUD_CHECK as already-settled via the production write path
+                // (ADR-16 §Write path). The incoming GeoScoreResult then completes the row.
+                var seedSignals = new EnumMap<>(entity.getSignals());
+                seedSignals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+                repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(seedSignals));
+            });
 
-        txTemplate.executeWithoutResult(status -> {
-            var entity = repository.saveAndFlush(
-                    TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60)));
-            // Seed FRAUD_CHECK as already-settled via the production write path
-            // (ADR-16 §Write path). The incoming GeoScoreResult then completes the row.
-            var seedSignals = new EnumMap<>(entity.getSignals());
-            seedSignals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-            repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(seedSignals));
-        });
+            var event = new GeoScoreResult(
+                    enrollmentId, C_LOW, null,
+                    Map.of(100, 1), List.of());
 
-        var event = new GeoScoreResult(
-                enrollmentId, C_LOW, null,
-                Map.of(100, 1), List.of());
+            rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
 
-        rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.GEO_SCORE_KEY, event);
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var entity = repository.findById(enrollmentId).orElseThrow();
+                assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
+                assertThat(entity.getDecidedAt()).isNotNull();
+            });
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            var entity = repository.findById(enrollmentId).orElseThrow();
-            assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
-            assertThat(entity.getDecidedAt()).isNotNull();
-        });
+            // The decisions exchange is shared: the background sweep may finalize other suites'
+            // expired rows and publish their (timeout-FAILED) decisions into this capture queue.
+            // Match on this row's persisted decisionId instead of taking the first message.
+            var decisionId = repository.findById(enrollmentId).orElseThrow().getDecisionId();
+            var decision = awaitDecisionFor(captureQueueName, decisionId);
+            assertThat(decision.originalRequest()).isNotNull();
+            assertThat(decision.decisionResult())
+                    .isEqualTo(dev.sindic.enrollmenthub.contracts.events.DecisionResult.APPROVED);
+            assertThat(decision.signals().get("GEO_SCORE").riskLevel())
+                    .isEqualTo(dev.sindic.enrollmenthub.contracts.events.RiskLevel.LOW);
+            assertThat(decision.signals().get("FRAUD_CHECK").outcome())
+                    .isEqualTo(dev.sindic.enrollmenthub.contracts.events.SignalOutcome.OK);
+            assertThat(decision.decidedAt()).isNotNull();
+        } finally {
+            amqpAdmin.deleteQueue(captureQueueName);
+        }
+    }
 
-        var decision = rabbitTemplate.receiveAndConvert(captureQueueName, 2_000,
-                new ParameterizedTypeReference<EnrollmentDecisionEvent>() {});
-        assertThat(decision).isNotNull();
-        assertThat(decision.decisionId()).isNotNull();
-        assertThat(decision.originalRequest()).isNotNull();
-        assertThat(decision.decisionResult())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.DecisionResult.APPROVED);
-        assertThat(decision.signals().get("GEO_SCORE").riskLevel())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.RiskLevel.LOW);
-        assertThat(decision.signals().get("FRAUD_CHECK").outcome())
-                .isEqualTo(dev.sindic.enrollmenthub.contracts.events.SignalOutcome.OK);
-        assertThat(decision.decidedAt()).isNotNull();
+    /** Drains the capture queue until the decision carrying {@code decisionId} appears. */
+    private EnrollmentDecisionEvent awaitDecisionFor(String queue, UUID decisionId) {
+        var deadline = Instant.now().plusSeconds(10);
+        while (Instant.now().isBefore(deadline)) {
+            var received = rabbitTemplate.receiveAndConvert(queue, 200,
+                    new ParameterizedTypeReference<EnrollmentDecisionEvent>() {});
+            if (received != null && received.decisionId().equals(decisionId)) {
+                return received;
+            }
+        }
+        throw new AssertionError("No EnrollmentDecisionEvent for decisionId=" + decisionId + " within timeout");
     }
 
     @Test

@@ -1,0 +1,22 @@
+# Grafana datasource provisioning — a fresh `docker compose up` yields a working
+# three-signal setup with no manual clicks. If an existing grafana-data volume
+# already holds manually-added datasources with these names, delete the manual
+# ones (or `docker compose down -v`) to avoid duplicates.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

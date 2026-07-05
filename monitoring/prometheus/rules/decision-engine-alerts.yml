@@ -1,0 +1,37 @@
+groups:
+  - name: decision-engine
+    rules:
+      # Publisher-confirm failures on any decision-engine publish (intake, check
+      # commands, decision events). reason=nack — the broker refused the publish;
+      # reason=returned — unroutable (mandatory publishing; check bindings).
+      # The affected work is not lost: intake/check publishes are retried via broker
+      # redelivery, decision events via the dispatch backstop (ADR-17). Sustained
+      # firing means broker instability or a missing binding.
+      - alert: DecisionPublishFailures
+        expr: increase(decisionengine_publish_failures_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Decision-engine publish failures (reason: {{ $labels.reason }})"
+          description: >
+            {{ $value }} publisher-confirm failure(s) with reason={{ $labels.reason }}
+            in the last 15 minutes. nack = broker refused; returned = unroutable
+            (verify the consumer binding exists). Retries are automatic; investigate
+            the broker and bindings if sustained.
+
+      # The ADR-17 stuck-outbox alert: a decided enrollment has been awaiting
+      # dispatch for more than 5 minutes, meaning BOTH the eager after-commit
+      # dispatch and the scheduled sweep backstop are failing to publish.
+      # Rows in the outbox state are never lost (decision_result NOT NULL,
+      # dispatched_at NULL), but downstream consumers are not receiving decisions.
+      - alert: StuckDecisionOutbox
+        expr: decisionengine_outbox_oldest_age_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Decided enrollment(s) undispatched for more than 5 minutes"
+          description: >
+            The oldest decided-but-undispatched correlation row is {{ $value }}s old.
+            Check broker health and decision-engine logs; the sweep re-publishes
+            automatically once the broker accepts publishes again (ADR-17).
