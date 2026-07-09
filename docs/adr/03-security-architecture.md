@@ -58,7 +58,7 @@ Validating prerequisite tokens at the gateway is rejected. Prerequisite checks a
 
 ## Scope
 
-The initial build targets the credit-card prerequisite route. The eIDAS (`INVOICE`) route follows the same prerequisite-token contract — same header, same validation order — but is issued under its own trust root, distinct from both the authentication issuer and the credit-card issuer. Adding a verification type later adds a trust root rather than changing the model. The architecture supports both prerequisite types; the credit-card path is built first.
+The initial build targets the credit-card prerequisite route. The eIDAS (`INVOICE`) route (ADR-19) follows the same prerequisite-token contract — same header, same validation order — but is issued under its own trust root, distinct from both the authentication issuer and the credit-card issuer. Adding a verification type later adds a trust root rather than changing the model. The architecture supports both prerequisite types; the credit-card path is built first.
 
 ## Consequences
 

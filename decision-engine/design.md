@@ -1,7 +1,7 @@
 ## Decision Engine Design
 
 > **Status.** This document specifies the target design. The synchronous JWT prerequisite
-> gate is **not yet implemented in MVP 1** — see ADR-03. The separate
+> gate is **not yet implemented in MVP 1** — see ADR-03 / ADR-19. The separate
 > `enrollment.decisions` exchange (§Exchange and queue topology), the timeout policy
 > (ADR-15, `EnrollmentService.processExpiredTimeouts`), and the decision dispatch outbox
 > (ADR-17, `DecisionDispatcher`) are now implemented. Both the timeout finalize and the dispatch
@@ -17,7 +17,7 @@ the intake exchange. No correlation record is created here, and no business stat
 touched.
 
 > **MVP-2 scope.** Synchronous JWT validation (Credit_Card_JWT for CREDIT_CARD,
-> eIDAS_JWT for INVOICE) is planned for MVP 2 per ADR-03. In MVP 1 the
+> eIDAS_JWT for INVOICE) is planned for MVP 2 per ADR-03 and ADR-19. In MVP 1 the
 > endpoint accepts requests without a prerequisite gate; the JwtValidator call shown
 > below is the target shape for MVP 2.
 
@@ -37,7 +37,7 @@ class EnrollmentController {
     ResponseEntity<Void> accept(@RequestBody EnrollmentCommand command,
                                 @RequestHeader("Authorization") String bearerToken) {
         // [MVP 2] Synchronous prerequisite gate — rejected requests never enter
-        // the pipeline. See ADR-03 for the eIDAS JWT contract and the
+        // the pipeline. See ADR-03 / ADR-19 for the eIDAS JWT contract and the
         // prerequisite gate decision.
         jwtValidator.validate(bearerToken, command.paymentType());
 
@@ -116,7 +116,7 @@ the per-signal request queues (`geo.scoring.requests.queue`, `fraud.detection.re
 per-signal result queues (`decision-engine.geo-score.results.queue`, `decision-engine.fraud-check.results.queue`).
 
 There is no Identity queue. The eIDAS Connector issues a signed JWT as a prerequisite
-gate validated synchronously by the REST endpoint (MVP 2 — see ADR-03); it
+gate validated synchronously by the REST endpoint (MVP 2 — see ADR-03 / ADR-19); it
 does not subscribe to RabbitMQ events. Identity is not represented as a signal in the
 correlation record's signal map — prerequisites are outside the ADR-14 signal
 classification model.
@@ -394,7 +394,7 @@ this route (no sentinel value):
 | `INVOICE`     | *absent*  | `PENDING`   |
 
 Prerequisite gates (Credit_Card_JWT, eIDAS_JWT) are resolved synchronously at the
-REST entry point (MVP 2 — ADR-03). They produce no entry in the signal
+REST entry point (MVP 2 — ADR-03 / ADR-19). They produce no entry in the signal
 map.
 
 **Scatter-gather flow (CREDIT_CARD route):**
