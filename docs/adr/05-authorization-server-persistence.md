@@ -60,3 +60,4 @@ Reversal requires bean wiring and two Flyway migrations. The deferred items laye
 
 - **ADR-01** — PostgreSQL and Flyway, the persistence and migration tooling adopted here for the IdP.
 - **ADR-03** — The authorization-server is the Layer 2 token issuer, and this decision makes its authorization state durable. Co-located prerequisite-token issuance shares this deployable and persistence.
+- **ADR-19** — eIDAS Connector JWT. The eIDAS prerequisite issuer would be a third trust root on the same co-located, offline-JWKS-validated pattern this persistence backs.
