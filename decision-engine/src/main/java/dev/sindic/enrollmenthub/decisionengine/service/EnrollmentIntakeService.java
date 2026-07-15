@@ -23,8 +23,10 @@ import java.time.Instant;
  * <p>The {@code originalRequest} is serialised to a JSON string once at intake
  * and stored verbatim in the correlation record. At decision time it is mapped
  * into the {@code EnrollmentSnapshot} embedded in {@code EnrollmentDecisionEvent}
- * — without the correlation {@code enrollmentId}, which never leaves the service
- * (ADR-17 §Amendment).
+ * — without the correlation {@code enrollmentId}, which is not carried on the
+ * {@code EnrollmentDecisionEvent} (a fresh {@code decisionId} is published instead;
+ * ADR-17 §Amendment). Internally the {@code enrollmentId} is still the correlation
+ * key across the scatter-gather and is returned to the caller in the 202.
  */
 @Service
 @Slf4j

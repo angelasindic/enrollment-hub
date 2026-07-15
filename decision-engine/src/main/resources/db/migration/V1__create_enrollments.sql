@@ -5,7 +5,11 @@ CREATE SCHEMA IF NOT EXISTS enrollment_hub;
 
 CREATE TABLE enrollment_hub.enrollments (
 
-    -- Correlation identity (internal PK — never published downstream)
+    -- Correlation identity (internal PK). Used as the correlation key across the
+    -- scatter-gather — the intake event, the per-signal check commands, and their
+    -- results all carry it — and returned to the caller in the 202. Withheld only
+    -- from the outbound EnrollmentDecisionEvent, which publishes a fresh decision_id
+    -- instead (see decision_id below, ADR-17).
     enrollment_id           UUID            PRIMARY KEY,
     payment_type            VARCHAR(20)     NOT NULL,
 

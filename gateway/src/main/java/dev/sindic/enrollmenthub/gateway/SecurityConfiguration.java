@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.web.SecurityFilterChain;
@@ -55,7 +56,7 @@ public class SecurityConfiguration {
                 // in X-XSRF-TOKEN (past the default BREACH/XOR masking). It does NOT write the cookie on a
                 // GET — the token is resolved lazily — so CsrfCookieFilter forces resolution and the
                 // cookie is issued after login.
-                .csrf((csrf) -> csrf.spa())
+                .csrf(CsrfConfigurer::spa)
                 .addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class)
                 // RP-initiated logout: clears the local session and ends the authorization-server session.
                 .logout((logout) -> logout

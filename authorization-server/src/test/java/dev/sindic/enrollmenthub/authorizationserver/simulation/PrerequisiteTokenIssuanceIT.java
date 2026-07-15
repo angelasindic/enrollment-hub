@@ -76,7 +76,7 @@ class PrerequisiteTokenIssuanceIT extends BaseIntegrationTest {
         MvcResult result = mockMvc.perform(post("/oauth2/token")
                         .param("grant_type", "client_credentials")
                         .param("scope", "prerequisite:issue")
-                        .with(httpBasic("enrollment-gateway", "enrollment-secret")))
+                        .with(httpBasic("payment-check-client", "payment-check-client-secret")))
                 .andExpect(status().isOk())
                 .andReturn();
         return readJson(result).get("access_token").asText();

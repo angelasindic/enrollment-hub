@@ -30,11 +30,11 @@ sequenceDiagram
     Browser->>GW: POST /enrollment/public/v1/enrollments (session cookie, X-XSRF-TOKEN)
     GW->>DE: POST ... with Bearer JWT (TokenRelay, proxied not redirected)
     Note over DE: validate signature, expiry, issuer against JWKS, check scope enrollment:write
-    DE-->>GW: 201 Created
-    GW-->>Browser: 201 Created
+    DE-->>GW: 202 Accepted (enrollmentId, decision out-of-band)
+    GW-->>Browser: 202 Accepted (enrollmentId)
 ```
 
-- **`oauth2Login`** drives the OIDC `authorization_code` flow. A single client registration (`enrollment-gateway`) means an unauthenticated request redirects straight to the IdP.
+- **`oauth2Login`** drives the OIDC `authorization_code` flow via the login registration (key `enrollment-gateway`, client-id `enrollment-login-client`); an unauthenticated request redirects straight to the IdP. A second registration (`payment-check`, client-id `payment-check-client`) handles the server-to-server `client_credentials` call below.
 - **`TokenRelay`** filter attaches the logged-in user's access token to each proxied request.
 - **CSRF** pairs Spring Security 7's `csrf().spa()` with a small `CsrfCookieFilter`. `spa()` provides the readable `XSRF-TOKEN` cookie repository and a `SpaCsrfTokenRequestHandler` that accepts the raw cookie value echoed in the `X-XSRF-TOKEN` header (past the default BREACH/XOR masking). It does **not** write the cookie on a plain GET — the token is resolved lazily — so `CsrfCookieFilter` forces resolution and the cookie is issued on the first authenticated GET; without it a browser/SPA client lands after login with no token to echo.
 - **RP-initiated logout** ends both the local session and the authorization-server session.
@@ -43,7 +43,7 @@ sequenceDiagram
 
 The credit-card route requires a signed `credit_card_check` attestation before an enrollment is accepted. The token is held server-side under the gateway's custody (BFF), so the browser never sees it.
 
-1. After login, the client calls `POST /payment-check` (session cookie + `X-XSRF-TOKEN`). The gateway fetches the attestation from the issuer server-to-server — the `payment-check` `client_credentials` registration (client `enrollment-gateway`, scope `prerequisite:issue`) — and stores it in the session. The response is `204 No Content`; the JWT stays server-side.
+1. After login, the client calls `POST /payment-check` (session cookie + `X-XSRF-TOKEN`). The gateway fetches the attestation from the issuer server-to-server — the `payment-check` `client_credentials` registration (client-id `payment-check-client`, scope `prerequisite:issue`) — and stores it in the session. The response is `204 No Content`; the JWT stays server-side.
 2. The next `POST /enrollment/**` carries only the session cookie. `PrerequisiteTokenRelayFilter` attaches the stored attestation alongside the relayed access token, and the decision-engine validates it (issuer `…/payment-check`, audience `enrollment-api`, claim `type=credit_card_check`, RS256, keys at `GET /payment-check/jwks`). The decision-engine rejects a credit-card enrollment that arrives without it.
 
 The issuer is simulated and co-located in the [authorization-server](../authorization-server) as a trust root separate from the OIDC issuer. For local testing it can be called directly (10-minute TTL):
@@ -64,11 +64,12 @@ curl -X POST http://localhost:9000/payment-check/credit-card \
 
 ## Configuration
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `IDP_ISSUER_URI` | `http://localhost:9000` | authorization-server base URI, used to build the explicit provider endpoint URLs |
-| `GATEWAY_CLIENT_SECRET` | `enrollment-secret` | OAuth2 client secret (must match the authorization-server registration) |
-| `DECISION_ENGINE_HOST` | `localhost` | downstream resource-server host |
+| Env var                          | Default                          | Purpose                                                                          |
+|----------------------------------|----------------------------------|----------------------------------------------------------------------------------|
+| `IDP_ISSUER_URI`                 | `http://localhost:9000`          | authorization-server base URI, used to build the explicit provider endpoint URLs |
+| `PAYMENT_CHECK_CLIENT_SECRET`    | `payment-check-client-secret `   | payment-check (M2M) client secret (must match the authorization-server registration)       |
+| `ENROLLMENT_LOGIN_CLIENT_SECRET` | `enrollment-login-client-secret` | OAuth2 login secret (must match the authorization-server registration)           |
+| `DECISION_ENGINE_HOST`           | `localhost`                      | downstream resource-server host                                                  |
 
 The provider endpoints are configured explicitly rather than through Spring's discovery-based `issuer-uri` property, so the gateway boots even when the authorization-server is momentarily unavailable.
 

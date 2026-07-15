@@ -13,6 +13,9 @@ datasources:
 
   - name: Tempo
     type: tempo
+    # Stable uid so the Loki derived field below can reference this datasource;
+    # without it Grafana generates a random uid the static file cannot point at.
+    uid: tempo
     access: proxy
     url: http://tempo:3200
 
@@ -20,3 +23,15 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
+    jsonData:
+      # Log -> trace linking: OTLP-ingested logs carry trace_id as structured
+      # metadata (a label to Grafana), not as text in the log body — hence
+      # matcherType label, not a regex over the line. Renders a "View trace"
+      # button on each log line in Explore that opens the trace in Tempo.
+      derivedFields:
+        - name: TraceID
+          matcherType: label
+          matcherRegex: trace_id
+          datasourceUid: tempo
+          url: "${__value.raw}"
+          urlDisplayLabel: "View trace"

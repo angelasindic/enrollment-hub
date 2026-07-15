@@ -21,11 +21,16 @@ exercises the dual-token custody (login JWT + `credit_card_check` prerequisite) 
 > `http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway`. Logging in via `localhost:8079`
 > fails the redirect-URI match.
 
-## Step 0 — Build once
-
+## Step 0 — Install contract module
+Optional: Build and verify whole reactor first
 ```bash
 cd /Users/angela/portfolio/enrollment-hub
-./mvnw -DskipTests install      # installs `contracts` so each module resolves it
+./mvnw clean verify
+```
+Then install contracts (and parent pom)
+```bash
+cd /Users/angela/portfolio/enrollment-hub
+./mvnw -pl contracts -am -DskipTests install     # installs `contracts` so each module resolves it
 ```
 
 ## Step 1 — Start infrastructure
@@ -182,6 +187,7 @@ docker compose down          # keep volumes (Nominatim import survives)
 - **curl instead of DevTools.** Possible, but you must copy `JSESSIONID` + `XSRF-TOKEN` out of the
   browser after the interactive login — the OIDC `authorization_code` form login can't be scripted
   cleanly with curl. The DevTools-console approach avoids that.
-- **Credentials and IDs** (sandbox only): user `user` / `password`; gateway client
-  `enrollment-gateway` / `enrollment-secret`; payment-check scope `prerequisite:issue`; enrollment
-  scope `enrollment:write`.
+- **Credentials and IDs** (sandbox only): user `user` / `password`; login client
+  `enrollment-login-client` / `enrollment-login-client-secret`; payment-check (M2M) client
+  `payment-check-client` / `payment-check-client-secret`; scopes `enrollment:write` (login) and
+  `prerequisite:issue` (payment-check).
