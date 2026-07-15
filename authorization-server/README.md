@@ -18,9 +18,10 @@ The enrollment-hub **identity provider (IdP)**, built on Spring Authorization Se
 
 | Client | Grant | Scopes | Redirect |
 |---|---|---|---|
-| `enrollment-gateway` | `authorization_code`, `refresh_token`, `client_credentials` | `openid`, `profile`, `enrollment:write`, `prerequisite:issue` | `http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway` |
+| `enrollment-login-client` | `authorization_code`, `refresh_token` | `openid`, `profile`, `enrollment:write` | `http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway` |
+| `payment-check-client` | `client_credentials` | `prerequisite:issue` | — (server-to-server, no redirect) |
 
-The `client_credentials` grant with scope `prerequisite:issue` is what the gateway uses to call the payment-check issuer server-to-server (below); the `authorization_code` grant is the user login.
+Two clients with **disjoint scopes** (ADR-03): the login client carries `enrollment:write` for the user flow, the machine client carries `prerequisite:issue` only for the server-to-server payment-check call (below). Keeping them separate stops a `client_credentials` token from ever holding `enrollment:write`. The login registration key remains `enrollment-gateway` (hence the redirect path); only the client-ids differ.
 
 Consent is required, so the user approves scopes on first login.
 
@@ -39,7 +40,7 @@ In the normal flow the gateway calls this server-to-server and holds the JWT in 
 
 ```
 # 1) client_credentials token carrying the issue scope
-TOKEN=$(curl -s -u enrollment-gateway:enrollment-secret \
+TOKEN=$(curl -s -u payment-check-client:payment-check-client-secret \
   -d grant_type=client_credentials -d scope=prerequisite:issue \
   http://localhost:9000/oauth2/token | jq -r .access_token)
 
@@ -54,7 +55,7 @@ curl -s -X POST http://localhost:9000/payment-check/credit-card \
 
 ## Persistence
 
-Registered clients, authorizations (codes, access and refresh tokens, flow state), user consent, and the user store are persisted in PostgreSQL via the SAS JDBC services and `JdbcUserDetailsManager`, so authorization state survives restarts and is available to every replica (ADR-05). The service owns the `authorization_server` schema in the `enrollmenthub` database, and Flyway manages it. The `enrollment-gateway` client is seeded idempotently on startup, and the demo user is seeded by Flyway.
+Registered clients, authorizations (codes, access and refresh tokens, flow state), user consent, and the user store are persisted in PostgreSQL via the SAS JDBC services and `JdbcUserDetailsManager`, so authorization state survives restarts and is available to every replica (ADR-05). The service owns the `authorization_server` schema in the `enrollmenthub` database, and Flyway manages it. The `enrollment-login-client` and `payment-check-client` clients are seeded idempotently on startup, and the demo user is seeded by Flyway.
 
 Token validation does not yet share this property. The RSA signing key is regenerated on each startup, so a JWT signed before a restart, or by a different replica, fails validation until the deferred persistent signing key is in place (ADR-05).
 
@@ -62,12 +63,13 @@ Token validation does not yet share this property. The RSA signing key is regene
 
 ## Configuration
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `GATEWAY_CLIENT_SECRET` | `enrollment-secret` | secret for the `enrollment-gateway` client (must match the gateway) |
-| `DB_HOST` | `localhost` | PostgreSQL host (`enrollmenthub` DB, `authorization_server` schema) |
-| `DB_USER` | `postgres` | datasource username |
-| `DB_PASSWORD` | `postgres` | datasource password |
+| Env var                          | Default                          | Purpose                                                             |
+|----------------------------------|----------------------------------|---------------------------------------------------------------------|
+| `PAYMENT_CHECK_CLIENT_SECRET`    | `payment-check-client-secret `   | payment-check (M2M) client secret (must match the gateway)                    |
+| `ENROLLMENT_LOGIN_CLIENT_SECRET` | `enrollment-login-client-secret` | OAuth2 login secret (must match the gateway)                        |
+| `DB_HOST`                        | `localhost`                      | PostgreSQL host (`enrollmenthub` DB, `authorization_server` schema) |
+| `DB_USER`                        | `postgres`                       | datasource username                                                 |
+| `DB_PASSWORD`                    | `postgres`                       | datasource password                                                 |
 
 > **Sandbox only:** the demo user (username `user`, password `password`), the `{noop}` client secret, and the per-startup RSA signing key are not production-grade. A persistent signing key (keystore) and a real user store or identity federation remain deferred (ADR-05).
 

@@ -22,8 +22,8 @@ spring:
         registration:
           enrollment-gateway:
             provider: spring-authorization-server
-            client-id: enrollment-gateway
-            client-secret: ${GATEWAY_CLIENT_SECRET:enrollment-secret}
+            client-id: enrollment-login-client
+            client-secret: ${ENROLLMENT_LOGIN_CLIENT_SECRET:enrollment-login-client-secret}
             authorization-grant-type: authorization_code
             redirect-uri: "http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway"
             scope:
@@ -31,11 +31,12 @@ spring:
               - profile
               - enrollment:write
           # client_credentials registration for the server-to-server payment-check call (Step 3):
-          # same client, distinct grant + scope. No redirect-uri (not a user/login flow).
+          # a SEPARATE client from the login registration (ADR-03): distinct client-id + secret,
+          # scope prerequisite:issue only. No redirect-uri (not a user/login flow).
           payment-check:
             provider: spring-authorization-server
-            client-id: enrollment-gateway
-            client-secret: ${GATEWAY_CLIENT_SECRET:enrollment-secret}
+            client-id: payment-check-client
+            client-secret: ${PAYMENT_CHECK_CLIENT_SECRET:payment-check-client-secret}
             authorization-grant-type: client_credentials
             scope:
               - prerequisite:issue

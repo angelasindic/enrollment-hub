@@ -67,6 +67,15 @@ The cache TTL is a purely technical decision (no external ToS constraints — AD
 and freshness trade-offs alone. A cache hit means "we've geocoded this address before," not "this enrollment has been
 scored."
 
+**Pepper rotation** — rotating `GEOCODING_CACHE_HMAC_SECRET` re-keys every entry, so the cache goes cold: each
+enrollment pays one Nominatim round-trip (~50–200 ms instead of ~1 ms) until the cache re-warms, and the orphaned
+entries expire via TTL. This is the same state as initial deployment. Lookups arrive at enrollment rate through the
+AMQP listener — a cold cache makes each one a miss but multiplies nothing — and the self-hosted Nominatim absorbs
+that rate by construction. Versioned peppers (dual-version lookup with rewrite-on-fallback) were considered and
+rejected: they add a second live secret and a fallback read on every miss, purchased against an event that occurs
+only on suspected compromise — where wholesale invalidation is acceptable. The pepper is not a credential to any
+external system, so no calendar rotation applies.
+
 **Geo-index** — country-partitioned Redis GEO sorted sets, keyed `geo:{countryCode}` (e.g. `geo:{DE}`). Each ZSET member
 is a `enrollmentId` (the per-enrollment correlation UUID — see ADR-11); its score is the 52-bit geohash of the
 enrollment's `(lon, lat)` computed by `GEOADD`. Coordinates are therefore encoded into the score rather than stored

@@ -19,7 +19,7 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Proves the JDBC persistence hardening (ADR-05): Flyway applies cleanly, the gateway client is
+ * Proves the JDBC persistence hardening (ADR-05): Flyway applies cleanly, both OAuth2 clients are
  * seeded idempotently, the JdbcUserDetailsManager-backed user store resolves the seeded BCrypt user,
  * and an authorization round-trips through the Postgres-adapted oauth2_authorization table.
  */
@@ -45,14 +45,15 @@ class AuthorizationServerPersistenceIT extends BaseIntegrationTest {
     ApplicationRunner registeredClientSeeder;
 
     @Test
-    void gatewayClient_isSeeded_andSeederIsIdempotent() throws Exception {
-        assertThat(registeredClientRepository.findByClientId("enrollment-gateway")).isNotNull();
-        assertThat(clientRowCount()).isEqualTo(1);
+    void bothClients_areSeeded_andSeederIsIdempotent() throws Exception {
+        assertThat(registeredClientRepository.findByClientId("enrollment-login-client")).isNotNull();
+        assertThat(registeredClientRepository.findByClientId("payment-check-client")).isNotNull();
+        assertThat(clientRowCount()).isEqualTo(2);
 
-        // Re-running the seeder must not create a duplicate (the guard is findByClientId).
+        // Re-running the seeder must not create duplicates (the guard is findByClientId per client).
         registeredClientSeeder.run(null);
 
-        assertThat(clientRowCount()).isEqualTo(1);
+        assertThat(clientRowCount()).isEqualTo(2);
     }
 
     @Test
@@ -67,7 +68,7 @@ class AuthorizationServerPersistenceIT extends BaseIntegrationTest {
 
     @Test
     void authorization_roundTripsThroughPostgres() {
-        RegisteredClient client = registeredClientRepository.findByClientId("enrollment-gateway");
+        RegisteredClient client = registeredClientRepository.findByClientId("enrollment-login-client");
         OAuth2AccessToken accessToken = new OAuth2AccessToken(
                 OAuth2AccessToken.TokenType.BEARER, "access-token-value",
                 Instant.now(), Instant.now().plusSeconds(300));

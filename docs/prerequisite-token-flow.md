@@ -35,7 +35,8 @@ sequenceDiagram
     Note over U,AS: 1 — Payment-check step (server-to-server, the browser never sees the attestation)
     U->>G: POST /payment-check (Cookie JSESSIONID, X-XSRF-TOKEN)
     Note over G: Authenticated session. Reads the logged-in user's sub from the OidcUser principal.
-    G->>AS: POST /oauth2/token (client_credentials, scope=prerequisite:issue, HTTP Basic enrollment-gateway)
+    G->>AS: POST /oauth2/token (grant_type=client_credentials, scope=prerequisite:issue)<br/>Authorization: Basic base64(payment-check-client:client_secret)
+    Note over G,AS: Client auth = client_secret_basic: client_id:client_secret is base64-encoded<br/>in the Authorization header, not sent as a body/query field (RegisteredClient CLIENT_SECRET_BASIC).
     AS-->>G: 200 access_token (M2M, scope prerequisite:issue)
     G->>AS: POST /payment-check/credit-card (subject=user-sub, Authorization: Bearer M2M)
     Note over AS: Mints a credit_card_check JWT signed by the payment-check key.<br/>Distinct iss (.../payment-check) and distinct kid, sub=user, aud=enrollment-api, short exp.

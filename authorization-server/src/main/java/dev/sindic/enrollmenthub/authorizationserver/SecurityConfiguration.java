@@ -29,11 +29,14 @@ import org.springframework.security.oauth2.server.authorization.JdbcOAuth2Author
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
 import org.springframework.security.oauth2.server.authorization.settings.ClientSettings;
+import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
+import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
 import org.springframework.security.provisioning.JdbcUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
@@ -45,6 +48,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -146,39 +150,68 @@ public class SecurityConfiguration {
     }
 
     /**
-     * Seeds the single login client (the enrollment-hub gateway on :8079) into the persistent
+     * Seeds the enrollment login and payment check client (the enrollment-hub gateway on :8079) into the persistent
      * repository on startup if absent. Idempotent across restarts; the DB row is the source of truth.
-     * Secret is externalised via {@code GATEWAY_CLIENT_SECRET} (dev default for local runs).
+     * Secrets are externalized via {@code PAYMENT_CHECK_CLIENT_SECRET} and  {@code ENROLLMENT_LOGIN_CLIENT_SECRET}
      */
     @Bean
     public ApplicationRunner registeredClientSeeder(
             RegisteredClientRepository registeredClientRepository,
-            @Value("${GATEWAY_CLIENT_SECRET:enrollment-secret}") String gatewaySecret) {
+            @Value("${ENROLLMENT_LOGIN_CLIENT_SECRET:enrollment-login-client-secret}") String loginSecret,
+            @Value("${PAYMENT_CHECK_CLIENT_SECRET:payment-check-client-secret}") String paymentCheckSecret) {
         return args -> {
-            if (registeredClientRepository.findByClientId("enrollment-gateway") == null) {
-                registeredClientRepository.save(gatewayClient(gatewaySecret));
+            if (registeredClientRepository.findByClientId("enrollment-login-client") == null) {
+                registeredClientRepository.save(loginClient(loginSecret));
+            }
+            if (registeredClientRepository.findByClientId("payment-check-client") == null) {
+                registeredClientRepository.save(paymentCheckClient(paymentCheckSecret));
             }
         };
     }
 
-    private static RegisteredClient gatewayClient(String gatewaySecret) {
+    private static RegisteredClient loginClient(String loginSecret) {
         return RegisteredClient.withId(UUID.randomUUID().toString())
-                .clientId("enrollment-gateway")
-                .clientSecret("{noop}" + gatewaySecret)
+                .clientId("enrollment-login-client")
+                .clientSecret("{noop}" + loginSecret)
                 .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN)
-                // client_credentials: the gateway calls the payment-check issuer M2M (scope prerequisite:issue).
-                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
                 .redirectUri("http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway")
                 // Must EXACTLY match the client's post_logout_redirect_uri ({baseUrl} -> no trailing slash).
                 .postLogoutRedirectUri("http://127.0.0.1:8079")
                 .scope(OidcScopes.OPENID)
                 .scope(OidcScopes.PROFILE)
                 .scope("enrollment:write")
-                .scope("prerequisite:issue")
                 .clientSettings(ClientSettings.builder().requireAuthorizationConsent(true).build())
                 .build();
+    }
+
+    private static RegisteredClient paymentCheckClient(String paymentCheckSecret) {
+        return RegisteredClient.withId(UUID.randomUUID().toString())
+                .clientId("payment-check-client")
+                .clientSecret("{noop}" + paymentCheckSecret)
+                .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
+                // client_credentials: the gateway calls the payment-check issuer M2M (scope prerequisite:issue).
+                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
+                .scope("prerequisite:issue")
+                .build();
+    }
+
+    /**
+     * Stamps {@code aud: enrollment-api} on access tokens carrying {@code enrollment:write}, so the
+     * decision-engine can validate audience against the resource it protects (see
+     * {@code spring.security.oauth2.resourceserver.jwt.audiences}) instead of accepting any token
+     * signed by this issuer. Other tokens (e.g. the {@code prerequisite:issue} client_credentials
+     * token consumed by the payment-check simulation) keep the default audience (the client id).
+     */
+    @Bean
+    public OAuth2TokenCustomizer<JwtEncodingContext> accessTokenAudienceCustomizer() {
+        return context -> {
+            if (OAuth2TokenType.ACCESS_TOKEN.equals(context.getTokenType())
+                    && context.getAuthorizedScopes().contains("enrollment:write")) {
+                context.getClaims().audience(List.of("enrollment-api"));
+            }
+        };
     }
 
     /**

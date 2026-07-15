@@ -34,9 +34,15 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          # jwk-set-uri (not issuer-uri) avoids issuer discovery at startup, so the service boots
-          # offline and the Testcontainers ITs keep working without the IdP running.
+          # jwk-set-uri keeps key resolution off the discovery endpoint, so the service boots
+          # offline and the Testcontainers ITs keep working without the IdP running. With
+          # jwk-set-uri present, issuer-uri triggers no startup discovery either — it only adds
+          # the iss validator. audiences adds the aud validator (the authorization-server stamps
+          # aud: enrollment-api on enrollment:write access tokens), so a token signed by the IdP
+          # for another resource is rejected here.
           jwk-set-uri: ${IDP_JWKS_URI:http://localhost:9000/oauth2/jwks}
+          issuer-uri: ${IDP_ISSUER_URI:http://localhost:9000}
+          audiences: ${ENROLLMENT_API_AUDIENCE:enrollment-api}
 
 # Prerequisite-token validation (ADR-03). The credit_card_check token is a trust root distinct from
 # the bearer token, validated against the payment-check issuer's JWKS. eIDAS (INVOICE route) is deferred.
