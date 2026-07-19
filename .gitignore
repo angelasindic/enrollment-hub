@@ -38,8 +38,8 @@ docs/structurizr/workspace.json
 docs/structurizr/.structurizr/
 
 
-### github scripts
-.github/node_modules/
+### ci scripts
+ci/node_modules/
 
 ### local stuff ###
 notes/

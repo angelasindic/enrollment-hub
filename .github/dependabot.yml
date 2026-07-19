@@ -1,9 +1,11 @@
 version: 2
 updates:
 
-  # ── npm packages in .github/ (tsx, esbuild, future CI scripts) ──────────────
+  # ── npm packages in ci/ (tsx, future CI scripts) ────────────────────────────
+  # Lives outside .github/ because Dependabot PRs may not modify that protected
+  # directory from non-actions ecosystems (dependabot-core#15237).
   - package-ecosystem: npm
-    directory: /.github
+    directory: /ci
     schedule:
       interval: weekly
       day: monday
