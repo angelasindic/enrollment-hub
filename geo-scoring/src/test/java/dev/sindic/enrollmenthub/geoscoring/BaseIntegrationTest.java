@@ -7,6 +7,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.MountableFile;
 
 import java.time.Duration;
 
@@ -45,13 +46,17 @@ public abstract class BaseIntegrationTest {
                             .forStatusCode(200)
                             .withStartupTimeout(Duration.ofSeconds(120)));
 
+    // Imports from a committed fixture (PBF_PATH) instead of downloading from Geofabrik at
+    // startup (PBF_URL): parallel CI runs were rate-limited by download.geofabrik.de, and the
+    // pinned extract keeps the Monaco addresses asserted in ITs stable. Refresh manually via
+    // https://download.geofabrik.de/europe/monaco-latest.osm.pbf if those assertions change.
     static final GenericContainer<?> NOMINATIM =
             new GenericContainer<>(DockerImageName.parse(NOMINATIM_IMAGE))
                     .withExposedPorts(8080)
-                    .withEnv("PBF_URL",
-                            "https://download.geofabrik.de/europe/monaco-latest.osm.pbf")
-                    .withEnv("REPLICATION_URL",
-                            "https://download.geofabrik.de/europe/monaco-updates/")
+                    .withCopyFileToContainer(
+                            MountableFile.forClasspathResource("fixtures/monaco-latest.osm.pbf"),
+                            "/nominatim/data/monaco-latest.osm.pbf")
+                    .withEnv("PBF_PATH", "/nominatim/data/monaco-latest.osm.pbf")
                     .withCreateContainerCmdModifier(cmd ->
                             cmd.getHostConfig().withShmSize(1024L * 1024L * 1024L))
                     .waitingFor(Wait.forHttp("/status")

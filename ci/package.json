@@ -1,5 +1,5 @@
 {
-  "name": "github-scripts",
+  "name": "ci-scripts",
   "private": true,
   "devDependencies": {
     "tsx": "4.22.3"
