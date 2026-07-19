@@ -27,7 +27,7 @@
 	<properties>
 		<java.version>25</java.version>
 		<spring-cloud.version>2025.1.2</spring-cloud.version>
-		<springdoc.version>2.8.6</springdoc.version>
+		<springdoc.version>3.0.3</springdoc.version>
 		<skipITs>false</skipITs>
 	</properties>
 
