@@ -24,7 +24,7 @@ The gateway is a stateful OAuth2 login client, not a stateless token validator. 
 
 This is a deliberate choice for a browser-facing flow: a public web client should not hold or manage raw tokens, so keeping the session server-side and exposing only an opaque cookie is the more defensible posture for a first-party enrollment frontend. The cost is statefulness, so scaling it horizontally requires a shared session store (see Consequences). It proxies a single route and composes no responses, so it is a stateful authenticating gateway, not a backend-for-frontend.
 
-The gateway authenticates but does not authorize: it establishes who the user is and relays their token, and does not inspect prerequisite tokens, which are opaque to it. Routing and edge rate limiting sit here too.
+The gateway authenticates but does not authorize: it establishes who the user is and relays their token, and does not inspect prerequisite tokens, which are opaque to it. Routing and edge rate limiting belong here too.
 
 ### Layer 3 — Decision Engine (resource server + prerequisite validation)
 

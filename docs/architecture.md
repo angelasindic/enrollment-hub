@@ -42,7 +42,7 @@ The document follows arc42, tailored for portfolio scope: quality goals are fold
 
 ### 1.1 Architectural Drivers
 
-Four primary forces shape the  design of the Enrollment Hub. Each defines a system pressure, followed by the architectural response.
+Four primary forces shape the design of the Enrollment Hub. Each defines a system pressure, followed by the architectural response.
 
 **Extensibility.** Fraud is an evolving threat, so new checks are added over time. Each check runs as its own service that joins the scatter-gather as a listener, so adding one is a localized change — a `SignalConfig` entry, a request builder, a result listener — never a rewrite of the scoring logic.
 
@@ -88,7 +88,7 @@ The 5 RPS baseline describes ingress volume only. Internal concurrency and resou
 
 ## 2. Constraints
 
-The drivers in §1 specify what the system must achieve, while the following constraints define the bouondaries within which it must operate:
+The drivers in §1 specify what the system must achieve, while the following constraints define the boundaries within which it must operate:
 
 ### 2.1 Technical & Infrastructure Constraints
 
@@ -208,7 +208,7 @@ The Redis data structures, the Lua scripts, and the retry and dead-letter behavi
 ### 5.4 Decision Engine
 The Decision Engine coordinates the processing pipeline, manages short-lived correlation state, and enforces the system's security and resiliency boundaries. It acts as the resource server, validating gateway-relayed JWTs and applying flow-specific authorization before admitting requests into the asynchronous pipeline (ADR-03). Once a request is authorized, the engine assumes control of the enrollment lifecycle.
 
-The engine aggregats concurrent signals against a durable correlation record (ADR-13) and evaluating them according to defined risk taxonomies (ADR-14). To protect upstream latency, the engine guarantees a deterministic decision deadline; downstream dependency failures or timeouts gracefully degrade individual signals rather than stalling the transaction (ADR-15). Once all available signals are resolved, the engine finalizes the assessment ensuring that late-arriving dependency responses cannot overwrite or reopen a settled decision (ADR-16).
+The engine aggregates concurrent signals against a durable correlation record (ADR-13) and evaluating them according to defined risk taxonomies (ADR-14). To protect upstream latency, the engine guarantees a deterministic decision deadline; downstream dependency failures or timeouts gracefully degrade individual signals rather than stalling the transaction (ADR-15). Once all available signals are resolved, the engine finalizes the assessment ensuring that late-arriving dependency responses cannot overwrite or reopen a settled decision (ADR-16).
 
 To eliminate dual-write risks, the final decision is written to the correlation record and published asynchronously via an out-of-band dispatch relay (ADR-17). The engine owns the decision and the short-lived correlation state, not the enrollment record, which belongs to the Account Service (ADR-02).
 
@@ -350,11 +350,13 @@ Concerns that cut across every module: security, privacy, observability, data ow
 
 Three layers (ADR-03):
 
-| Layer | Responsibility | Rejects |
-|---|---|---|
-| Edge Ingress | TLS termination, DDoS protection, network-level filtering | Malformed connections, blocked IPs/regions |
-| Spring Cloud Gateway | Routing, rate limiting, OIDC login (session) + token relay | Unauthenticated requests (redirected to login), rate-limit breaches |
-| Services (resource servers) | JWT validation (signature + expiry + issuer), authorization (role/scope), prerequisite token validation | Invalid/expired tokens, insufficient roles/scopes, missing/invalid prerequisite tokens |
+| Layer | Responsibility | Rejects | Status |
+|---|---|---|---|
+| Edge Ingress | TLS termination, DDoS protection, network-level filtering | Malformed connections, blocked IPs/regions | Target environment (§7.2); not part of the local stack |
+| Spring Cloud Gateway | Routing, OIDC `authorization_code` login (session) + token relay | Unauthenticated requests (redirected to login) | Implemented |
+| Services (resource servers) | JWT validation (signature, expiry, issuer, audience), scope authorization (`enrollment:write`), prerequisite-token validation | Invalid/expired tokens, wrong audience, insufficient scope, missing/invalid prerequisite tokens | Implemented |
+
+**Rate limiting (not implemented).** No request-rate cap exists on the enrollment route today. The gateway is the correct layer for it: in the target topology it is the only publicly reachable entry point, and it holds the authenticated session the limit should key on. The intended design keys the bucket on the authenticated principal — never on a client-supplied payload field — rejects with `429` and `Retry-After`, and exposes rejections as a Prometheus counter behind an alert rule (§8.4). Two constraints the implementation must record: in the local compose stack the decision-engine port is directly reachable, so a token holder bypasses the edge entirely and the limiter's guarantee assumes the production topology; and in-memory bucket state is a deliberate single-instance choice, where distributing it is a dependency and configuration change rather than a redesign. Login and token-endpoint brute-force limiting belongs on the authorization server, not this layer.
 
 The credit-card prerequisite is implemented end-to-end (ADR-18): the authorization-server issues a`credit_card_check` attestation under a distinct trust root, the gateway holds it server-side and relays it as `X-Prerequisite-Token`, and the decision-engine validates it conditionally on the CREDIT_CARD route. The full sequence — issuance, gateway custody, and two-trust-root validation — is in [prerequisite-token-flow.md](prerequisite-token-flow.md).
 
@@ -372,7 +374,7 @@ The credit-card prerequisite is implemented end-to-end (ADR-18): the authorizati
 - **Data minimization.** Only coordinates are held in the geo-index — no full names, phone numbers, or exact unit numbers. The geocoding cache stores only hashed address keys and coordinates.
 - **Pseudonymization (geo-index).** Members are single-use `enrollmentId` tokens, not identifiers; the link to identity is held separately in the access-controlled correlation store. This is pseudonymized personal data (GDPR Art. 4(5)), not anonymization — still in scope, but minimized and short-lived.
 - **Ephemeral storage (geo-index).** A 48-hour TTL expires the data automatically, bounding retention.
-- **Correlation store.** Holds enrollment state and aggregated risk scores, subject to GDPR retention policy (define the retention period before production). The correlation record includes `original_request` (JSON) with the full enrollment payload and retains it for the retention window: the payload is needed to assemble the `EnrollmentDecisionEvent` for account creation once the signals settle, and for the outbox sweep to replay that event after a crash (ADR-17). Long-term ownership of the enrollment data remains with the Account Service (ADR-02); the timeout window (default 60 minutes) bounds in-flight state, and the retention cleanup job (§10.1) removes the record, payload included, when the window closes.
+- **Correlation store.** Holds enrollment state and aggregated risk scores, subject to GDPR retention policy (define the retention period before production). The correlation record includes `original_request` (JSON) with the full enrollment payload: the payload is needed to assemble the `EnrollmentDecisionEvent` for account creation once the signals settle, and for the outbox sweep to replay that event after a crash (ADR-17). Long-term ownership of the enrollment data remains with the Account Service (ADR-02); the scatter-gather timeout (`decision-engine.scatter-gather.timeout`) bounds how long a record stays undecided, not how long its payload persists. **The retention job is specified but not implemented — `original_request` currently persists for the lifetime of the row.** The delete rule it must honor is already fixed (`decision-engine/design.md` §Retention ordering: only rows with `dispatched_at IS NOT NULL`, never a row in the outbox state); what remains open is the survival decision — which columns outlive the payload so that Art. 22 traceability is preserved — and the window itself (§10.1).
 - **Prerequisite tokens.** Validated in memory, not persisted. Only the validation result (pass/fail) and failure reason are logged.
 
 **Pre-production GDPR tasks.** Before go-live: document the lawful basis for fraud processing (legitimate interest,
@@ -396,16 +398,16 @@ Privacy boundaries keep the modules separate: the decision engine never stores c
 
 Three signals, two transport paths: traces and logs are **pushed** over OTLP through the OTel Collector; metrics are**pulled** — Prometheus scrapes each service's `/actuator/prometheus` endpoint directly and evaluates the alert rules.
 
-| Component | Role |
-|---|---|
-| SLF4J + Logback | Logging facade and implementation. `traceId` and `spanId` are injected into MDC automatically by Micrometer Tracing; every log record carries trace context without manual instrumentation. |
-| Micrometer Tracing + OTel bridge | Spring Boot tracing abstraction (`micrometer-tracing-bridge-otel`) connecting Micrometer's `ObservationRegistry` to the OpenTelemetry SDK. Handles span lifecycle and MDC population. |
-| OpenTelemetry SDK + OTLP export | Exports trace and log signals to the OTel Collector (Spring Boot 4 per-signal export configuration, `management.opentelemetry.<signal>.export.otlp.*`). |
-| OTel Collector | Receives traces and logs over OTLP; routes traces to Tempo and logs to Loki's native OTLP ingestion. |
-| Tempo | Distributed trace storage. |
-| Prometheus | Metrics: scrapes the Micrometer Prometheus registry of all five services; evaluates the alert rules in `monitoring/prometheus/rules/`. Domain metrics include geocoding latency and cache hit rate (eo-scoring), DLQ depth, publish-failure counters, and the outbox age (decision-engine). |
-| Loki | Log storage. Logs arrive from the OTel Collector, not from Promtail or log-file scraping. Correlated to traces in Grafana via `traceId`. |
-| Grafana | Single pane across all three signals; Prometheus/Tempo/Loki datasources are provisioned at startup. Correlates logs and traces by `traceId`. |
+| Component | Role                                                                                                                                                                                                                                                                                         |
+|---|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| SLF4J + Logback | Logging facade and implementation. `traceId` and `spanId` are injected into MDC automatically by Micrometer Tracing; every log record carries trace context without manual instrumentation.                                                                                                  |
+| Micrometer Tracing + OTel bridge | Spring Boot tracing abstraction (`micrometer-tracing-bridge-otel`) connecting Micrometer's `ObservationRegistry` to the OpenTelemetry SDK. Handles span lifecycle and MDC population.                                                                                                        |
+| OpenTelemetry SDK + OTLP export | Exports trace and log signals to the OTel Collector (Spring Boot 4 per-signal export configuration, `management.opentelemetry.<signal>.export.otlp.*`).                                                                                                                                      |
+| OTel Collector | Receives traces and logs over OTLP; routes traces to Tempo and logs to Loki's native OTLP ingestion.                                                                                                                                                                                         |
+| Tempo | Distributed trace storage.                                                                                                                                                                                                                                                                   |
+| Prometheus | Metrics: scrapes the Micrometer Prometheus registry of all five services; evaluates the alert rules in `monitoring/prometheus/rules/`. Domain metrics include geocoding latency and cache hit rate (geo-scoring), DLQ depth, publish-failure counters, and the outbox age (decision-engine). |
+| Loki | Log storage. Logs arrive from the OTel Collector, not from Promtail or log-file scraping. Correlated to traces in Grafana via `traceId`.                                                                                                                                                     |
+| Grafana | Single pane across all three signals; Prometheus/Tempo/Loki datasources are provisioned at startup. Correlates logs and traces by `traceId`.                                                                                                                                                 |
 
 **RabbitMQ trace-context propagation.** Micrometer Tracing and the OTel bridge integrate with Spring AMQP via the`ObservationRegistry` on both sides of the broker: publishes inject the W3C `traceparent` header into the AMQP message, and the `@RabbitListener` container restores the trace context before the handler runs. One enrollment therefore produces a single distributed trace spanning HTTP entry, intake publish/consume, the scatter to geo-scoring and fraud-detection, the gathered results, and the decision publish — across every queue hop, with no manual header handling.
 
@@ -477,7 +479,7 @@ Idempotent consumers achieve effectively-once semantics (at-least-once delivery 
 | Correlation-record race under concurrent arrivals | `SELECT FOR UPDATE` row lock; completion predicate evaluated inside the lock | ADR-16 |
 | Decision emission (exit-side dual-write) | Decision computed once and persisted to the correlation record before publish; an eager after-commit dispatch delivers it and a scheduled sweep replays it after a crash (commit-then-publish outbox) — exactly-once *computation*, at-least-once *delivery* | ADR-17 |
 | Late-arriving result after decision | Discarded by the idempotency guard at the status check; a `LateScoreArrived` retroactive review is an open decision (§6.3, §10.1) | ADR-16, §10.1 |
-| Late/redelivered result for an absent correlation row | A result whose row no longer exists (e.g. deleted by the retention job) finds no slot for the idempotency guard and instead throws `UnknownCorrelationException`, routed to the DLQ on first throw with no retry budget spent. A missing row is treated as an inconsistency for triage, so the retention window (§10.1) must exceed the maximum plausible result-arrival window — otherwise benign late results land in the DLQ as false inconsistencies | ADR-16, §10.1 |
+| Late/redelivered result for an absent correlation row | A result whose row no longer exists (e.g. deleted by the retention job, once implemented — §10.1) finds no slot for the idempotency guard and instead throws `UnknownCorrelationException`, routed to the DLQ on first throw with no retry budget spent. A missing row is treated as an inconsistency for triage, so the retention window (§10.1) must exceed the maximum plausible result-arrival window — otherwise benign late results land in the DLQ as false inconsistencies | ADR-16, §10.1 |
 | Poison-pill messages | DLX with bounded redelivery count | ADR-13 |
 
 Each consumer is written to be idempotent, including downstream consumers of `EnrollmentDecisionEvent`, which must tolerate the rare duplicate produced when the sweep re-publishes after a crash between the decision commit and the publisher confirm (ADR-17).
@@ -537,7 +539,7 @@ ADRs are maintained as separate files in [`docs/adr/`](adr) and referenced by nu
 | Decision | Options | Notes |
 |---|---|---|
 | **Internal Fraud Detection signals** | Velocity checks, device fingerprinting, email-domain analysis, and IP clustering are the primary candidates | The `FRAUD_CHECK` signal runs as a stub returning `SignalOutcome.OK` unconditionally in the current implementation. Which signals a real Fraud Detection service evaluates, what data dependencies and stores they require, and when they are introduced are scoped as a separate workstream, independent of the geo-scoring rollout. |
-| **Correlation store retention** | 60 minutes (MVP); production retention to be determined by GDPR DPIA and investigation-workflow requirements | The Decision Engine retains workflow state for scatter-gather aggregation only. Long-term enrollment and decision history is the Account Service's responsibility (ADR-02). The GDPR DPIA establishes the production retention window before go-live. |
+| **Correlation store retention** | Blocking sub-decision: what survives the payload (recommended: strip `original_request` at dispatch, keep ids/decision/timestamps for Art. 22 traceability, delete stripped rows after a window). The window itself is to be determined by GDPR DPIA and investigation-workflow requirements | No retention job exists yet: `original_request` persists for the lifetime of the row (§8.2). The Decision Engine retains workflow state for scatter-gather aggregation only; long-term enrollment and decision history is the Account Service's responsibility (ADR-02). Two constraints bind the implementation: the delete rule in `decision-engine/design.md` §Retention ordering (only `dispatched_at IS NOT NULL`), and §8.8 — the window must exceed the maximum plausible result-arrival window, or benign late results land in the DLQ as false inconsistencies. |
 | **Identity provider** | Self-hosted Spring Authorization Server vs. a managed OIDC provider | A self-hosted Spring Authorization Server is the current choice for local-development parity. Production selection depends on operational burden and existing identity infrastructure. |
 | **Late-arriving score after decision** | (1) emit a `LateScoreArrived` event with a causal reference to the original decision; (2) flag the correlation record and surface it on a monitoring dashboard; (3) reopen and rescore | The runtime behavior — idempotent discard of the late result — is in §6.3. The design response depends on the observed late-arrival rate in production, and is deferred until that rate is measurable. |
 
