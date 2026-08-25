@@ -46,3 +46,21 @@ notes/
 
 ### env variables for local dev
 .env
+.env.*
+!.env.example
+
+### key material — never commit
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.truststore
+*.pem
+*.key
+*.der
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+.netrc
+.npmrc

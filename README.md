@@ -123,6 +123,19 @@ is issued under a distinct trust root and validated conditionally on the CREDIT_
 
 ---
 
+## Decisions Worth Explaining
+
+- **Closing the decision the architecture rests on ([architecture](docs/architecture.md) §1.1, ADR-07).** Every later decision presumes an answer to whether the pipeline is asynchronous, so this one could not be left open — the design would keep moving under itself. The test was not how many arguments favoured messaging but whether any forced it: throughput does not, at five requests a second it decides nothing. Two do — applicant latency must not track a downstream P99 above a second, and an accepted enrollment must survive a crash — and together they leave one shape, with messaging's complexity as the price rather than an open question.
+- **One token cannot vouch for everything (ADR-03, ADR-18).** The identity provider verified a login, so that is all its token is trusted for; a payment check is a separate attestation from its own issuer, fetched server-to-server so the party being checked never presents their own result; the request payload is claimed by the caller, not verified by anyone. Each boundary is enforced by construction — distinct trust roots, audience-scoped tokens, subject binding — and pinned by negative-path tests rather than by convention.
+- **The textbook pattern fit only one end of the pipeline ([architecture](docs/architecture.md) §8.7, ADR-17).** Both ends face the same dual-write problem — a database write and a broker publish that cannot share one transaction — so a transactional outbox looks like the answer to both. It is, at egress: the decision is created inside a transaction with nothing upstream to carry it. At ingress there is something — the request itself becomes a durable queue message, so the queue is already the record of intent and an outbox would add a table and a relay for nothing; one detail about what exists at each end decides the design.
+- **The GDPR deadline turned out to be the detection window (ADR-12).** Spatial data is deleted after 48 hours to satisfy data minimisation, which reads like a limit on how much history the fraud signal can draw on. It is the opposite: a ring is only actionable for a short window, so older points do not help detect an active one — they accumulate into background density that makes ordinary city blocks look like clusters. The expiry that privacy requires is also what keeps the signal sharp.
+- **An unproven signal gets limited authority (ADR-14).** Geo-density is a new detection idea with no labeled fraud data behind it; how good the signal really is will only show in production. So it can flag an enrollment for human review but cannot reject one — a limit encoded in the signal's declared classification rather than left as a convention to remember. If production data earns it more authority, that is a one-value change.
+- **The solution is simple; arriving at it was not (ADRs 08–11).** Four decisions produced it: how to normalize a hand-written address, how to resolve it to coordinates, which algorithm measures clustering, and how to keep the density check and the index write from racing. Each constrains the next — the canonical form determines the cache key, the provider determines the coordinates — so they were evaluated together rather than chosen one at a time, and they were the only ones in the geo stack worth settling before code. The ADRs record what lost, and why.
+
+**What this does not establish.** The design is argued against its stated drivers, not proven against production traffic. Each ADR records the conditions that would overturn it, because these decisions are correct for a stated volume and latency envelope rather than in general; [architecture](docs/architecture.md) §7.4 sets out what changes for production and what breaks if it doesn't.
+
+---
+
 ## Implementation status
 
 The core pipeline, security perimeter, and observability are implemented. A few items are deliberately scoped out.
