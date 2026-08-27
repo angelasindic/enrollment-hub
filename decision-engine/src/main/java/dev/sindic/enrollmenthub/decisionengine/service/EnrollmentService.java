@@ -1,6 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionEngine;
+import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.GateClassification;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
@@ -23,35 +24,27 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Asynchronous convergence service for the scatter-gather pipeline.
+ * Gather half of the scatter-gather pipeline — decides an enrollment once its applicable
+ * signals have settled, and emits the decision.
  *
- * <p>Two entry points drive a correlation row to its decision, and both converge on the shared
- * {@link #finalizeDecision} terminal step so a timeout-completed and a result-completed enrollment
- * emit through one path (ADR-17): {@link #recordSignalResult} (a signal result arrived) and
- * {@link #processExpiredTimeouts} (the timeout poller, ADR-15).
+ * <p>An enrollment reaches its decision by one of two paths: {@link #recordSignalResult}, when
+ * the last outstanding signal result arrives, or {@link #processExpiredTimeouts}, when the timeout
+ * deadline passes first (ADR-15). Both converge on {@link #finalizeDecision} (ADR-17).
  *
- * <p>{@link #recordSignalResult} implements the ADR-16 protocol:
- * <ol>
- *   <li>Acquire a pessimistic row lock via
- *       {@link EnrollmentRepository#findByEnrollmentIdForUpdate(UUID)}.</li>
- *   <li>Idempotency guard — discard if the signal is already settled.</li>
- *   <li>Compute the new signal map via the immutable domain transition
- *       {@code EnrollmentProcess.withSignalResult(...)}.</li>
- *   <li>Persist via explicit {@code UPDATE} (ADR-16 §Write path) — no dirty-tracking on
- *       the JSONB column.</li>
- *   <li>If all applicable signals are settled, evaluate the decision and persist
- *       it (also via explicit {@code UPDATE}) — deciding only; no publish inside
- *       the locked transaction.</li>
- * </ol>
+ * <p>{@link #recordSignalResult} follows the ADR-16 protocol: lock the row, discard results for
+ * signals absent from the map (not applicable to this route) or already past {@code PENDING}, then
+ * persist a replaced signal map by explicit {@code UPDATE} — no dirty-tracking on the JSONB column.
+ * When the result settles the last signal, that same statement also writes the decision, so the row
+ * is never observable fully settled with a NULL decision.
  *
- * <p>Emission is separated from deciding per ADR-17 (commit-then-publish): the decision —
- * including its frozen {@code decisionId} — is durable at commit, and {@link #finalizeDecision}
- * registers an after-commit hook that triggers the eager dispatch via {@link DecisionDispatcher}.
- * If the eager publish fails, the row stays in the outbox state ({@code decision_result NOT NULL,
- * dispatched_at NULL}) and the {@link EnrollmentSweepJob} dispatch phase re-publishes it — always
- * the same persisted decision, so downstream {@code decisionId} dedup holds across every retry.
+ * <p>Deciding and emitting are separate steps (ADR-17): the decision and its {@code decisionId}
+ * are committed to the row before anything is published — a publish cannot be rolled back — which
+ * makes the row an outbox. {@link #finalizeDecision} registers an after-commit hook that emits via
+ * {@link DecisionDispatcher}; whatever it fails to emit stays in the outbox state
+ * ({@code decision_result NOT NULL, dispatched_at NULL}) for the {@link EnrollmentSweepJob} relay.
+ * Both publish the same stored {@code decisionId}, so a retry is a duplicate downstream dedups.
  *
- * @see EnrollmentIntakeService synchronous intake counterpart
+ * @see EnrollmentIntakeService scatter half —2 intake and per-signal command dispatch
  */
 @Service
 @Slf4j
@@ -72,6 +65,12 @@ public class EnrollmentService {
         this.clock = clock;
     }
 
+    /**
+     * Records one signal result on the locked correlation row, per the ADR-16 protocol above.
+     * Duplicate and late results are discarded idempotently.
+     *
+     * @throws UnknownCorrelationException if no row exists for {@code enrollmentId}
+     */
     @Transactional
     public void recordSignalResult(UUID enrollmentId, SignalConfig signal, SignalState newState) {
         var entity = repository.findByEnrollmentIdForUpdate(enrollmentId)
@@ -106,14 +105,14 @@ public class EnrollmentService {
     /**
      * Timeout poller path (ADR-15). Claims a batch of expired-and-undecided rows under
      * {@code PESSIMISTIC_WRITE} + {@code SKIP LOCKED} via
-     * {@link EnrollmentRepository#claimPendingTimeouts}, applies the per-classification timeout policy
-     * to each row's still-PENDING signals ({@link #applyTimeoutPolicy}), and finalizes it through the
-     * same {@link #finalizeDecision} path the result handler uses. Pollers on other instances claim disjoint batches; a row held under a handler's WAIT
-     * lock is skipped this pass and picked up next.
+     * {@link EnrollmentRepository#claimPendingTimeouts}, applies {@link #applyTimeoutPolicy} to
+     * each row's still-PENDING signals, and finalizes through {@link #finalizeDecision}. Pollers
+     * on other instances claim disjoint batches; a row held under a handler's WAIT lock is picked
+     * up next pass.
      *
      * @param now       cutoff — rows with {@code timeout_at <= now} are eligible
      * @param batchSize per-transaction claim size; small batches bound lock duration (ADR-15 §Lock variant)
-     * @return number of rows finalized in this batch; the caller drains while this equals {@code batchSize}
+     * @return number of rows claimed in this batch; the caller drains while this equals {@code batchSize}
      */
     @Transactional
     public int processExpiredTimeouts(Instant now, int batchSize) {
@@ -128,12 +127,10 @@ public class EnrollmentService {
     }
 
     /**
-     * Shared terminal step (ADR-16 §finalize, ADR-17 decide half). Given a fully-settled signal
-     * map for a row already locked {@code PESSIMISTIC_WRITE} by the caller, evaluate the decision
-     * and persist it — decision result, frozen {@code decisionId}, {@code decidedAt} — via the
-     * single-statement completion (guarded by {@code decision_result IS NULL}). No publish happens
-     * here: the after-commit hook registered below triggers the eager dispatch once the decision
-     * is durable, and the relay covers the case where that eager dispatch fails.
+     * Shared terminal step (ADR-16 §finalize, ADR-17 decide half). Evaluates the decision and
+     * persists it — result, {@code decisionId}, {@code decidedAt} — in one statement guarded by
+     * {@code decision_result IS NULL}. No publish here: the after-commit hook below dispatches
+     * once the decision is durable, with the relay as backstop.
      *
      * <p>Precondition: the caller holds the row lock and every signal in {@code settledSignals}
      * has reached a terminal state.
@@ -159,11 +156,11 @@ public class EnrollmentService {
     }
 
     /**
-     * Registers the eager half of the ADR-17 emission model: once the surrounding decide
-     * transaction commits, {@link DecisionDispatcher#dispatchNow} publishes the just-persisted
-     * decision. The hook swallows failures by design — the commit is already durable, a throw
-     * from afterCommit would nack a correctly-processed message, and re-delivery is the
-     * {@link EnrollmentSweepJob} dispatch phase's job, not the inbound message's.
+     * Eager half of the ADR-17 emission model: once the decide transaction commits,
+     * {@link DecisionDispatcher#dispatchNow} publishes the just-persisted decision. Failures are
+     * swallowed by design — the commit is already durable, throwing from {@code afterCommit} would
+     * nack a correctly-processed message, and re-publishing is the {@link EnrollmentSweepJob}
+     * relay's job.
      */
     private void registerEagerDispatch(UUID enrollmentId) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -181,18 +178,17 @@ public class EnrollmentService {
 
     /**
      * Timeout transition (ADR-15), applied per signal by {@link GateClassification}; already-terminal
-     * signals are unchanged. Applied on the entity's signal map to match {@link #recordSignalResult}'s
-     * direct-map style.
+     * signals are unchanged.
      * <ul>
-     *   <li>{@code BEST_EFFORT} / {@code SCORING_SIGNAL} — <b>fail open</b>: the still-PENDING signal
-     *       becomes {@link SignalState#failed()} (FAILED processing state), contributing nothing to
-     *       aggregation. Degraded availability of a non-critical check does not block enrollment.</li>
-     *   <li>{@code REQUIRED} — <b>fail closed</b>: the still-PENDING signal settles with
-     *       {@link SignalOutcome#FAILED}, which drives {@link DecisionResult#REJECTED} in
-     *       {@link DecisionEngine}. An unverifiable required check rejects rather than approves.</li>
+     *   <li>{@code BEST_EFFORT} / {@code SCORING_SIGNAL} — <b>fail open</b>: becomes
+     *       {@link SignalState#failed()}, contributing nothing to aggregation. Degraded
+     *       availability of a non-critical check does not block enrollment.</li>
+     *   <li>{@code REQUIRED} — <b>fail closed</b>: settles with {@link SignalOutcome#FAILED},
+     *       which drives {@link DecisionResult#REJECTED}. An unverifiable required check
+     *       rejects rather than approves.</li>
      * </ul>
      */
-    private static Map<SignalConfig, SignalState> applyTimeoutPolicy(Map<SignalConfig, SignalState> signals) {
+    static Map<SignalConfig, SignalState> applyTimeoutPolicy(Map<SignalConfig, SignalState> signals) {
         var timedOut = new EnumMap<>(signals);
         timedOut.replaceAll((signal, state) -> {
             if (state.processingState() != SignalProcessingState.PENDING) {

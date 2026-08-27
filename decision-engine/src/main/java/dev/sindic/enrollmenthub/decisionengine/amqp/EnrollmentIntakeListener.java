@@ -1,6 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.amqp;
 
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.service.EnrollmentIntakeService;
 import dev.sindic.enrollmenthub.decisionengine.service.EnrollmentMapper;
 import lombok.RequiredArgsConstructor;

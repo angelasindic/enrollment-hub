@@ -19,36 +19,29 @@ import java.util.UUID;
 /**
  * Repository for the {@code enrollment_hub.enrollments} correlation table.
  *
- * <p>Three concurrency strategies coexist, each for a distinct race; the rationale
- * lives in the ADRs, the methods just point at it:
+ * <p>Three concurrency strategies coexist, each for a distinct race:
  * <ul>
- *   <li><b>Intake dedup</b> — {@link #insertIfAbsent} relies on the {@code enrollment_id}
- *       primary key via {@code ON CONFLICT DO NOTHING} (ADR-13 §Ingress Inversion).</li>
- *   <li><b>Handler coordination</b> — {@link #findByEnrollmentIdForUpdate}
- *       ({@code PESSIMISTIC_WRITE}, WAIT) serialises two handlers settling different
- *       signals on the same row (ADR-16).</li>
- *   <li><b>Poller claim</b> — {@link #claimPendingTimeouts} ({@code PESSIMISTIC_WRITE},
- *       {@code SKIP LOCKED}) lets pollers partition expired rows without blocking
- *       handlers (ADR-15).</li>
+ *   <li><b>Intake dedup</b> — {@link #insertIfAbsent}, {@code ON CONFLICT DO NOTHING} on the
+ *       {@code enrollment_id} primary key (ADR-13).</li>
+ *   <li><b>Handler coordination</b> — {@link #findByEnrollmentIdForUpdate},
+ *       {@code PESSIMISTIC_WRITE} with WAIT, serialising two handlers settling different signals
+ *       on one row (ADR-16).</li>
+ *   <li><b>Batch claim</b> — {@link #claimPendingTimeouts} and {@link #claimUndispatched},
+ *       {@code PESSIMISTIC_WRITE} with {@code SKIP LOCKED}, partitioning work across instances
+ *       without blocking handlers (ADR-15, ADR-17).</li>
  * </ul>
- * {@link #findPendingTimeouts} is the read-only, lock-free variant for diagnostics.
+ *
+ * <p>The JSONB-bearing statements are native queries because PostgreSQL needs an explicit
+ * {@code CAST(… AS jsonb)} on the bound text, which JPQL cannot express portably.
  */
 public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UUID> {
 
     /**
-     * Idempotent intake insert as a single atomic statement. {@code ON CONFLICT
-     * (enrollment_id) DO NOTHING} makes the {@code enrollment_id} primary key the
-     * authoritative deduplicator: a concurrent redelivery of the same id cannot
-     * raise a duplicate-key exception — the losing insert is absorbed and reported
-     * as zero rows. No prior {@code existsById} probe is needed; this statement is
-     * its own fast-path.
+     * Idempotent intake insert (ADR-13). The primary key is the deduplicator, so a concurrent
+     * redelivery is absorbed instead of raising a duplicate-key exception — no {@code existsById}
+     * probe needed, this statement is its own fast path.
      *
-     * <p>Native query because {@code ON CONFLICT} is PostgreSQL-specific and the
-     * two JSONB columns need an explicit {@code ::jsonb} cast (same reason as
-     * {@link #updateSignals}).
-     *
-     * @return {@code 1} if a new row was inserted; {@code 0} if the row already
-     *         existed (idempotent redelivery)
+     * @return {@code 1} if a row was inserted, {@code 0} if it already existed
      */
     @Modifying
     @Query(value = """
@@ -65,28 +58,20 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                        @Param("createdAt") Instant createdAt,
                        @Param("timeoutAt") Instant timeoutAt);
 
-    /**
-     * Loads the correlation record with a {@code PESSIMISTIC_WRITE} lock.
-     * The row lock is held until the enclosing transaction commits, preventing
-     * concurrent handlers from reading or writing the same row.
-     */
+    /** Loads the row under {@code PESSIMISTIC_WRITE}, held until the transaction commits (ADR-16). */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT r FROM EnrollmentEntity r WHERE r.enrollmentId = :enrollmentId")
     Optional<EnrollmentEntity> findByEnrollmentIdForUpdate(@Param("enrollmentId") UUID enrollmentId);
 
-    /**
-     * Reads the intake idempotency-ledger state without loading the full row
-     * (ADR-13 §Ingress Inversion). Empty when the correlation record does not exist.
-     */
+    /** Intake ledger state without loading the row (ADR-13). Empty when the row does not exist. */
     @Query("SELECT r.intakeStatus FROM EnrollmentEntity r WHERE r.enrollmentId = :enrollmentId")
     Optional<IntakeStatus> findIntakeStatus(@Param("enrollmentId") UUID enrollmentId);
 
     /**
-     * Transitions the intake ledger {@code PENDING → COMPLETED} after the per-signal
-     * commands have been dispatched (ADR-13 §Ingress Inversion). Idempotent: a second
-     * call on an already-COMPLETED row is a no-op write that still reports one row.
+     * Intake ledger {@code PENDING → COMPLETED}, once the per-signal commands are dispatched
+     * (ADR-13). Unguarded, so a repeat call is a harmless no-op write that still reports one row.
      *
-     * @return number of rows updated; the caller expects {@code 1}
+     * @return rows updated; callers expect {@code 1}
      */
     @Modifying
     @Query(value = """
@@ -97,20 +82,12 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
     int markIntakeCompleted(@Param("enrollmentId") UUID enrollmentId);
 
     /**
-     * Replaces the {@code signals} JSONB column with the given serialized value.
-     * Per ADR-16 §Write path, the JSON-mapped collection column is written via an explicit
-     * SQL {@code UPDATE} rather than via JPA dirty-tracking; the returned row
-     * count is the persistence guarantee.
+     * Replaces the {@code signals} column by explicit {@code UPDATE} rather than JPA
+     * dirty-tracking (ADR-16 §Write path); the returned row count is the persistence guarantee.
      *
-     * <p>Native query because PostgreSQL needs an explicit {@code ::jsonb} (or
-     * {@code CAST(… AS jsonb)}) on the bound text parameter; the JPQL layer
-     * does not expose a portable way to request that cast.
-     *
-     * @param enrollmentId    target row PK
-     * @param signalsJson  serialised {@code Map<SignalConfig, SignalState>} —
-     *                     produced via the same {@code JsonMapper} the entity's
-     *                     {@code @JdbcTypeCode(SqlTypes.JSON)} uses on the read path
-     * @return number of rows updated; callers assert {@code == 1}
+     * @param signalsJson serialised {@code Map<SignalConfig, SignalState>}, written with the same
+     *                    {@code JsonMapper} the entity's {@code @JdbcTypeCode(SqlTypes.JSON)} reads
+     * @return rows updated; callers assert {@code == 1}
      */
     @Modifying
     @Query(value = """
@@ -122,20 +99,13 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                       @Param("signalsJson") String signalsJson);
 
     /**
-     * Single-statement completion: writes the final signals JSON together with the
-     * decision columns ({@code decisionResult}, {@code decisionId},
-     * {@code decidedAt}). Used when the just-applied signal transition completes
-     * the process — collapses what would otherwise be two UPDATEs into one and
-     * removes the intra-row state where signals are settled but the decision is
-     * still NULL.
+     * Writes the final signals together with the decision columns in one statement, so the row is
+     * never observable fully settled with a NULL decision (ADR-16 §finalize, ADR-17).
      *
-     * <p>Guarded by {@code decisionResult IS NULL} so a second caller racing on
-     * the same row cannot overwrite a decision that has already been recorded.
-     * Returns {@code 0} on that guard (caller skips the publish path) and
-     * {@code 1} on success.
+     * <p>Guarded by {@code decision_result IS NULL}: a racing caller cannot overwrite a decision
+     * already recorded, and gets {@code 0} back — its cue to skip the dispatch.
      *
-     * <p>Native query because PostgreSQL needs the explicit {@code ::jsonb} cast
-     * on the signals parameter (same reason as {@link #updateSignals}).
+     * @return {@code 1} on success, {@code 0} when the guard rejected
      */
     @Modifying
     @Query(value = """
@@ -157,19 +127,17 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                              @Param("decidedAt") Instant decidedAt);
 
     /**
-     * Atomically claims a batch of expired-and-undecided rows for the timeout poller
-     * (ADR-15), each held under {@code PESSIMISTIC_WRITE} until the transaction commits.
-     * Rows already locked by a handler are <b>skipped</b>, not waited on, so N pollers
-     * partition the work into disjoint sets (safe horizontal scaling).
+     * Claims a batch of expired-and-undecided rows for the timeout poller (ADR-15). Rows already
+     * locked by a handler are skipped rather than waited on, so N pollers partition the work.
      *
-     * <p>The {@code "-2"} on {@code jakarta.persistence.lock.timeout} is the Jakarta
-     * Persistence sentinel for {@code SKIP LOCKED} ({@code org.hibernate.LockOptions.SKIP_LOCKED});
-     * a literal is required because {@code @QueryHint} takes a compile-time constant. If a
-     * future Hibernate reassigns it, the {@code SkipLockedClaimIT} regression test fails loudly.
+     * <p>{@code "-2"} is the Jakarta Persistence sentinel for {@code SKIP LOCKED}
+     * ({@code org.hibernate.LockOptions.SKIP_LOCKED}); a literal is required because
+     * {@code @QueryHint} takes a compile-time constant. {@code SkipLockedClaimIT} fails loudly if
+     * a future Hibernate reassigns it.
      *
      * @param now      cutoff; rows with {@code timeout_at <= now} are eligible
      * @param pageable batch sizer; small batches bound per-transaction lock duration
-     * @return claimed rows by {@code timeoutAt} ascending, disjoint from other callers
+     * @return claimed rows, {@code timeoutAt} ascending, disjoint from other callers
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")})
@@ -182,19 +150,14 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
     List<EnrollmentEntity> claimPendingTimeouts(@Param("now") Instant now, Pageable pageable);
 
     /**
-     * Atomically claims a batch of decided-but-undispatched rows for the decision dispatch
-     * relay (ADR-17), each held under {@code PESSIMISTIC_WRITE} until the transaction commits.
-     * Same {@code SKIP LOCKED} idiom as {@link #claimPendingTimeouts}: rows locked by another
-     * relay instance or by the eager dispatch's stamp are skipped, so concurrent dispatchers
-     * partition the outbox into disjoint sets.
-     *
-     * <p>The claim predicate is the outbox state: {@code decision_result IS NOT NULL AND
-     * dispatched_at IS NULL}. In steady state the eager after-commit dispatch has already
-     * stamped every decided row, so this scan comes back empty (backed by the partial index
-     * {@code idx_enrollments_undispatched}).
+     * Claims a batch of rows in the outbox state — {@code decision_result NOT NULL AND
+     * dispatched_at IS NULL} — for the dispatch relay (ADR-17), same {@code SKIP LOCKED} idiom as
+     * {@link #claimPendingTimeouts}. In steady state the eager after-commit dispatch has already
+     * stamped every decided row, so this comes back empty off the partial index
+     * {@code idx_enrollments_undispatched}.
      *
      * @param pageable batch sizer; small batches bound per-transaction lock duration
-     * @return claimed rows by {@code decidedAt} ascending, disjoint from other callers
+     * @return claimed rows, {@code decidedAt} ascending, disjoint from other callers
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")})
@@ -207,13 +170,12 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
     List<EnrollmentEntity> claimUndispatched(Pageable pageable);
 
     /**
-     * Stamps the outbox marker after the publisher confirm for the decision event returned
-     * (ADR-17 ordering rule: publish → await confirm → stamp, never before). Guarded by
-     * {@code dispatched_at IS NULL} so the eager after-commit dispatch and the relay cannot
-     * double-stamp a row they raced on; the loser observes {@code 0} — not an error, the
-     * duplicate publish is byte-identical (same {@code decision_id}) and absorbed downstream.
+     * Stamps the outbox marker, only ever after the broker's publisher confirm returns
+     * (ADR-17 ordering: publish → await confirm → stamp). Guarded by {@code dispatched_at IS NULL}
+     * so the eager dispatch and the relay cannot double-stamp a row they raced on; the loser sees
+     * {@code 0}, which is not an error — both published the same {@code decision_id}.
      *
-     * @return {@code 1} if this call stamped the row; {@code 0} if it was already stamped
+     * @return {@code 1} if this call stamped the row, {@code 0} if it was already stamped
      */
     @Modifying
     @Query("""
@@ -226,12 +188,9 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                        @Param("dispatchedAt") Instant dispatchedAt);
 
     /**
-     * Oldest decide-commit timestamp among rows still awaiting dispatch (the ADR-17 outbox
-     * state: {@code decision_result NOT NULL AND dispatched_at IS NULL}). Empty when the
-     * outbox is drained — the steady state, since the eager after-commit dispatch stamps rows
-     * within milliseconds. Feeds the {@code decisionengine.outbox.oldest.age} gauge behind
-     * the {@code StuckDecisionOutbox} alert; served by the same partial index as
-     * {@link #claimUndispatched} ({@code idx_enrollments_undispatched}).
+     * Oldest {@code decided_at} still in the outbox state — the {@code decisionengine.outbox.oldest.age}
+     * gauge behind the {@code StuckDecisionOutbox} alert (ADR-17). Empty in steady state, since the
+     * eager dispatch stamps within milliseconds. Served by {@code idx_enrollments_undispatched}.
      */
     @Query("""
             SELECT MIN(r.decidedAt) FROM EnrollmentEntity r
@@ -241,10 +200,9 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
     Optional<Instant> findOldestUndispatchedDecidedAt();
 
     /**
-     * Read-only counterpart to {@link #claimPendingTimeouts(Instant, Pageable)}.
-     * Returns every expired-and-undecided row without acquiring any lock; suitable
-     * for diagnostics, dashboards, and tests that need to observe table state.
-     * Not suitable for claim-and-process work — concurrent callers would race.
+     * Lock-free counterpart to {@link #claimPendingTimeouts} for observing table state; unusable
+     * for claim-and-process work, where concurrent callers would race. No production caller —
+     * currently referenced only by tests.
      */
     @Query("""
             SELECT r FROM EnrollmentEntity r

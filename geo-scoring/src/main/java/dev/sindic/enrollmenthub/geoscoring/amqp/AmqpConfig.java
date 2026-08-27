@@ -72,7 +72,7 @@ class AmqpConfig {
 
     /**
      * RabbitTemplate with publisher confirms, mandatory publishing, and observability
-     * hooks wired in. See ADR-06 §Delivery Semantics for the full pattern stack:
+     * hooks wired in. See ADR-13 for the delivery-semantics stack:
      *
      * <ul>
      *   <li><b>Confirms</b> (Guaranteed Delivery, EIP) — combined with
@@ -143,7 +143,7 @@ class AmqpConfig {
         var factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(messageConverter);
-        // The request queue is owned/declared by the decision-engine (ADR-13 §Channel ownership),
+        // The request queue is owned/declared by the decision-engine (ADR-13 §Channel Ownership),
         // not by geo-scoring. Tolerate it not existing yet at startup — the container retries
         // declaration instead of failing fatally if geo-scoring starts before the decision-engine.
         factory.setMissingQueuesFatal(false);

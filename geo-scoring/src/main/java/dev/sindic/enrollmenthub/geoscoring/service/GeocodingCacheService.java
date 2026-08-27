@@ -12,7 +12,8 @@ import java.util.Optional;
 /**
  * Geocoding cache backed by Redis/Valkey.
  *
- * <p>Key:   SHA-256 hex digest of the normalized address (see {@link GeocodingCacheKeyService}).
+ * <p>Key:   HMAC-SHA256 digest of the normalized address, peppered — see
+ *          {@link GeocodingCacheKeyService}; a plain digest would be brute-forceable.
  * <p>Value: JSON-serialized {@link CoordinatesPayload}.
  * <p>TTL:   caller-supplied (no external ToS constraints — ADR-09).
  */

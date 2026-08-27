@@ -32,21 +32,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AMQP topology and publisher configuration for the decision-engine.
+ * AMQP topology and publisher configuration for the decision-engine (ADR-13;
+ * decision-engine/design.md §Exchange and queue topology).
  *
- * <h2>Per-signal scatter-gather (decision-engine/design.md §Exchange and queue topology)</h2>
- * The decision-engine dispatches one command per applicable signal to the
- * {@link #CHECK_REQUEST_EXCHANGE} direct exchange (routing key = signal name, e.g.
- * {@link #GEO_SCORE_KEY} / {@link #FRAUD_CHECK_KEY}) and gathers replies from the
- * {@link #CHECK_RESULT_EXCHANGE}. It owns both exchanges and the per-signal request and result
- * queues (declared in {@link #checkChannelTopology()}); worker services attach a listener to a
- * request queue by name without redeclaring it.
+ * <p>Four exchanges: intake, the per-signal request and result pair, and outbound decisions. The
+ * decision-engine owns all of them, plus every queue except the account service's decision queue
+ * (ADR-13 §Channel Ownership) — workers attach a listener to a request queue by name rather than
+ * redeclaring it.
  */
 @Slf4j
 @Configuration
 @EnableConfigurationProperties(AmqpProperties.class)
 public class AmqpConfig {
-
 
     public static final String ENROLLMENT_INTAKE_EXCHANGE         = "enrollment.intake";
     public static final String ENROLLMENT_INTAKE_ROUTING_KEY     = "enrollment.intake";
@@ -62,10 +59,9 @@ public class AmqpConfig {
 
     static final String PUBLISH_FAILURE_METRIC = "decisionengine_publish_failures_total";
 
-    // --- Per-signal scatter-gather topology (decision-engine/design.md §Exchange and queue topology) ---
+    // --- Per-signal scatter-gather topology ---
     // Two direct exchanges, owned by the decision-engine: requests out, results back.
-    // Declared here so the cut-over change can wire dispatch + listeners; nothing
-    // publishes to or consumes from these yet.
+    // Routing key is the signal name, so adding a signal is a queue + binding, not a new exchange.
 
     public static final String CHECK_REQUEST_EXCHANGE = "enrollment.check.request";
     public static final String CHECK_RESULT_EXCHANGE  = "enrollment.check.result";
@@ -126,10 +122,9 @@ public class AmqpConfig {
     }
 
     /**
-     * Durable topic exchange for outbound decision events (decision-engine/design.md §Exchange and queue topology). Single publisher:
-     * {@code EnrollmentDecisionPublisher}. Single consumer: the account service (which owns its
-     * own queue and binding — see ADR-13 §Channel Ownership). Declared idempotently at
-     * startup; the binding from this exchange to the account-service queue is out of scope.
+     * Durable topic exchange for outbound decision events. Sole publisher is
+     * {@code EnrollmentDecisionPublisher}; the account service owns its queue and its binding to
+     * this exchange (ADR-13 §Channel Ownership), so neither is declared here.
      */
     @Bean
     TopicExchange enrollmentDecisionsExchange() {
@@ -138,7 +133,7 @@ public class AmqpConfig {
 
     /**
      * Reuses the auto-configured JsonMapper (fail-on-unknown-properties=false via application.yml)
-     * for outgoing serialization on the RabbitTemplate.
+     * so wire serialization matches the rest of the app.
      */
     @Bean
     JacksonJsonMessageConverter messageConverter(JsonMapper jsonMapper) {
@@ -149,27 +144,25 @@ public class AmqpConfig {
         DefaultJacksonJavaTypeMapper typeMapper = new DefaultJacksonJavaTypeMapper();
         typeMapper.setTrustedPackages(
                 "dev.sindic.enrollmenthub.contracts.events",
-                "dev.sindic.enrollmenthub.contracts.domain");
+                "dev.sindic.enrollmenthub.contracts.domain",
+                // EnrollmentEvent, the decision-engine's own intake envelope
+                "dev.sindic.enrollmenthub.decisionengine.amqp");
         converter.setJavaTypeMapper(typeMapper);
         return converter;
     }
 
     /**
-     * RabbitTemplate with publisher confirms, mandatory publishing, and observability
-     * hooks wired in. See ADR-06 §Delivery Semantics for the full pattern stack:
+     * RabbitTemplate wired so that no publish can fail silently (ADR-13):
      *
      * <ul>
-     *   <li><b>Confirms</b> (Guaranteed Delivery, EIP) — combined with
-     *       {@code waitForConfirmsOrDie} on the publish path, a lost or nacked broker
-     *       confirm surfaces as an exception so the caller can retry.</li>
-     *   <li><b>Mandatory + ReturnsCallback</b> — an unroutable message (wrong exchange,
-     *       missing binding, typo'd routing key) is returned by the broker rather than
-     *       silently dropped. The return is recorded on the per-publish
-     *       {@code CorrelationData}; the publisher checks for it after
-     *       {@code waitForConfirmsOrDie} and throws.</li>
-     *   <li><b>Metrics</b> — nacks and returns increment
-     *       {@value #PUBLISH_FAILURE_METRIC} (tagged by {@code reason}) so ops can
-     *       alert on publish failures independently of caller-level retries.</li>
+     *   <li><b>Confirms</b> — with {@code waitForConfirmsOrDie} on the publish path, a nacked or
+     *       lost confirm surfaces as an exception the caller can retry.</li>
+     *   <li><b>Mandatory + ReturnsCallback</b> — an unroutable message is returned rather than
+     *       dropped. The return lands on the per-publish {@code CorrelationData}, which the
+     *       publisher inspects after the confirm, because this callback runs on the AMQP I/O
+     *       thread and cannot throw back to the caller.</li>
+     *   <li><b>Metrics</b> — nacks and returns increment {@value #PUBLISH_FAILURE_METRIC}, tagged
+     *       by {@code reason}, so ops alerts are independent of caller-level retries.</li>
      * </ul>
      */
     @Bean
@@ -217,9 +210,9 @@ public class AmqpConfig {
     // --- Per-signal scatter-gather topology beans (decision-engine/design.md §Exchange and queue topology) ---
 
     /**
-     * Declares the request and result direct exchanges and the decision-engine-owned per-signal
-     * queues (each with a dedicated DLX/DLQ). Workers bind a listener to a request queue by name
-     * in the cut-over change; result queues are consumed by the decision-engine's own listeners.
+     * Declares both direct exchanges and the four per-signal queues, each with a dedicated
+     * DLX/DLQ. Workers consume the request queues; the decision-engine's own listeners consume
+     * the result queues.
      */
     @Bean
     Declarables checkChannelTopology() {
@@ -277,17 +270,11 @@ public class AmqpConfig {
     }
 
     /**
-     * Retry policy applied to {@code @RabbitListener} invocations on this factory.
-     * Exponential backoff over {@link #MAX_RETRIES} attempts, with one exception
-     * type explicitly excluded so it is routed to the DLQ on the first throw
-     * instead of consuming the retry budget on a condition that cannot recover:
-     * <ul>
-     *   <li>{@link UnknownCorrelationException} — a signal result arrived for a
-     *       {@code enrollmentId} with no correlation row. Re-invoking the listener
-     *       cannot make the row appear; immediate DLQ routing surfaces the
-     *       inconsistency for triage instead of delaying it.</li>
-     * </ul>
-     * Package-private to enable focused unit tests on the retry decisions.
+     * Exponential backoff over {@link #MAX_RETRIES} attempts for {@code @RabbitListener}
+     * invocations, excluding {@link UnknownCorrelationException}: a result for an
+     * {@code enrollmentId} with no correlation row cannot be fixed by re-invoking the listener,
+     * so it goes to the DLQ on the first throw and surfaces the inconsistency for triage instead
+     * of spending the retry budget. Package-private for focused unit tests.
      */
     static RetryPolicy listenerRetryPolicy() {
         return RetryPolicy.builder()

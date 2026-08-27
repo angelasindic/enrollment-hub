@@ -35,7 +35,7 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
-		<!-- RabbitMQ — publish EnrollmentAccepted, consume GeoScoreComplete / IdentityCheckComplete -->
+		<!-- RabbitMQ — publish EnrollmentEvent, consume GeoScoreResult / FraudCheckResult -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-amqp</artifactId>

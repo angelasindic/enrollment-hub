@@ -18,12 +18,12 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Performs atomic density check + index operations against Redis GEO sorted sets.
+ * Density check and indexing against Redis GEO sorted sets (ADR-08, ADR-11).
  *
- * <p>Uses a Lua script ({@code geo-density.lua}) to atomically execute GEOSEARCH at
- * multiple radii followed by GEOADD in a single Redis call. This eliminates the
- * concurrent GEOSEARCH/GEOADD race (F-3) where simultaneous requests could all
- * score LOW before any GEOADD completes.
+ * <p>A single Lua script ({@code geo-density.lua}) runs GEOSEARCH at every configured radius and
+ * the GEOADD in one round trip, because the read and the write must not interleave: a fraud ring
+ * submitting N enrollments at once would otherwise have all N workers read a count of zero and
+ * score LOW before any of them indexed a point (geo-scoring/design.md §Atomicity, F-3).
  */
 @Slf4j
 @EnableConfigurationProperties(GeoIndexProperties.class)
@@ -65,7 +65,8 @@ public class GeoIndexService {
      * @param longitude   WGS 84 longitude
      * @param latitude    WGS 84 latitude
      * @param enrollmentId   enrollment request identifier to index
-     * @return density result with neighbor counts, triggered thresholds, and truncation flag
+     * @return neighbor counts per radius, the risk levels those counts triggered, and whether any
+     *         search hit the COUNT cap
      */
     public DensityResult checkAndIndex(String countryCode, double longitude, double latitude,
                                        String enrollmentId) {
@@ -128,7 +129,7 @@ public class GeoIndexService {
     /**
      * Assembles a {@link GeoScoreResult} event from the density result.
      *
-     * @param enrollmentId correlation ID from the original {@code EnrollmentAccepted} event
+     * @param enrollmentId correlation ID from the originating {@code GeoScoreRequest}
      * @param result       density check result
      * @return event ready for publishing to the decision-engine
      */

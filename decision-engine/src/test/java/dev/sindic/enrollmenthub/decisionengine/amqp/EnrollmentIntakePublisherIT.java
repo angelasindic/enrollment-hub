@@ -4,7 +4,7 @@ import dev.sindic.enrollmenthub.contracts.domain.Address;
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
+import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;

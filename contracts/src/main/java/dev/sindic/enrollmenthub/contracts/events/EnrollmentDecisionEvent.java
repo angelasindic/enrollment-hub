@@ -8,15 +8,11 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Published by the decision engine after all applicable signals have settled.
+ * The enrollment decision. Owned by the decision-engine.
  *
- * <p>{@code decisionId} is generated once and frozen when the decision is persisted (ADR-17);
- * redeliveries carry the same id, so it is the consumer-side idempotency key. The internal
- * correlation {@code enrollmentId} (the DB primary key) is intentionally not exposed —
- * {@code originalRequest} is an {@link EnrollmentSnapshot}, not the id-carrying intake payload.
- *
- * <p>{@code signals} is keyed by signal name (e.g. {@code "GEO_SCORE"},
- * {@code "FRAUD_CHECK"}).
+ * <p>Delivery is at-least-once: {@code decisionId} is stable across redeliveries of the same
+ * decision, so consumers deduplicate on it (ADR-17). {@code signals} is keyed by signal name, e.g.
+ * {@code "GEO_SCORE"}.
  */
 public record EnrollmentDecisionEvent(
         UUID decisionId,

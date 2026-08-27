@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
  *   <li><b>Serialization / connection errors</b> — propagate naturally.</li>
  * </ul>
  * All three drop into the listener retry interceptor. Consumers dedup by
- * {@code enrollmentId} (Idempotent Receiver — ADR-06 §Delivery Semantics).
+ * {@code enrollmentId} (ADR-13).
  */
 @Slf4j
 @Component

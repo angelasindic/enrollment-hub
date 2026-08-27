@@ -1,6 +1,6 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
+import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.domain.Address;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;

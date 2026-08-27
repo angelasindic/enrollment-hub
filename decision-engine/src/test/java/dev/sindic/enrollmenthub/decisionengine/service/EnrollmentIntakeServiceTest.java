@@ -1,7 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
+import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.amqp.CheckRequestPublisher;
 import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentIntakePublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;

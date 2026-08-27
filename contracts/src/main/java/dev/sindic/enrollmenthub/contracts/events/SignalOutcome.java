@@ -1,14 +1,8 @@
 package dev.sindic.enrollmenthub.contracts.events;
 
 /**
- * Outcome produced by a completed check-style signal (BEST_EFFORT or REQUIRED).
- * Null for score-style signals.
- *
- * <ul>
- *   <li>{@code OK}        — verification passed.</li>
- *   <li>{@code FAILED}    — verification did not pass; for BEST_EFFORT signals this drives REJECTED.</li>
- *   <li>{@code NO_RESULT} — signal ran but could not produce a meaningful result (fail-open).</li>
- * </ul>
+ * Result of a check-style signal: {@code OK} passed, {@code FAILED} did not pass, {@code NO_RESULT}
+ * ran but could not reach a verdict. What each implies for a decision is not defined here.
  */
 public enum SignalOutcome {
     OK,

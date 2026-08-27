@@ -38,8 +38,8 @@ import java.util.UUID;
 @RequestMapping("/enrollment/public/v1/enrollments")
 @Tag(name = "Enrollment",
         description = "Accepts enrollment requests and orchestrates asynchronous " +
-                "assurance checks (geo-scoring, fraud detection, identity verification) " +
-                "via scatter-gather. The final enrollment decision is delivered out-of-band.")
+                "assurance checks (geo-scoring, fraud detection) via scatter-gather. " +
+                "The final enrollment decision is delivered out-of-band.")
 @RequiredArgsConstructor
 public class EnrollmentController {
 
@@ -50,11 +50,10 @@ public class EnrollmentController {
     @Operation(
             summary = "Submit an enrollment request",
             description = """
-                    Accepts the enrollment data, persists a correlation record, and publishes \
-                    an EnrollmentAccepted event to initiate the assurance pipeline. \
-                    The request is routed by payment type — credit card requests trigger \
-                    geo-scoring, invoice requests trigger identity verification, and both \
-                    routes trigger fraud detection. \
+                    Accepts the enrollment data and publishes it to the intake channel, which \
+                    starts the assurance pipeline. The checks run depend on payment type — \
+                    credit card requests trigger geo-scoring and fraud detection, invoice \
+                    requests trigger fraud detection only. \
                     Returns immediately with a correlation enrollmentId; the final \
                     EnrollmentDecisionEvent is delivered asynchronously.""",
             responses = {

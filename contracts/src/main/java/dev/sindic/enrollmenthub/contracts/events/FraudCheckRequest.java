@@ -6,9 +6,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Command dispatched by the decision-engine to fraud detection on the {@code enrollment.check.request}
- * exchange (routing key {@code fraud.check}). Carries the full enrollment data — fraud detection
- * correlates across the whole request (identity, payment type, shipping and billing addresses).
+ * Command requesting a fraud check. Carries the full enrollment data, since fraud signals correlate
+ * across identity, payment type and both addresses.
  */
 public record FraudCheckRequest(
         EnrollmentData enrollmentData

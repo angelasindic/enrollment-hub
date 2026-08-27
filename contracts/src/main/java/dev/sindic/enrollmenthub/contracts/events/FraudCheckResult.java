@@ -3,10 +3,7 @@ package dev.sindic.enrollmenthub.contracts.events;
 import java.util.Objects;
 import java.util.UUID;
 
-/**
- * Published by Internal Fraud Detection, consumed by the decision-engine.
- * Produced on both routes (CREDIT_CARD and INVOICE).
- */
+/** Result of the fraud check. Owned by fraud-detection. Produced on every payment route. */
 public record FraudCheckResult(
         UUID enrollmentId,
         SignalOutcome outcome

@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>Uses the channel-scoped {@code invoke + waitForConfirmsOrDie} pattern so nacks, lost acks, and
  * unroutable returns all surface as exceptions to the caller; the failure drops into the listener
- * retry interceptor. Consumers dedup by {@code enrollmentId} (Idempotent Receiver — ADR-06).
+ * retry interceptor. Consumers dedup by {@code enrollmentId} (ADR-13).
  */
 @Slf4j
 @Component

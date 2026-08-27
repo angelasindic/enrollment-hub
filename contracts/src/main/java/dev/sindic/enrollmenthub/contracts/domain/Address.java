@@ -3,6 +3,10 @@ package dev.sindic.enrollmenthub.contracts.domain;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Postal address as submitted. Only {@code countryCode} is guaranteed present; the remaining
+ * fields are as the applicant entered them, unnormalised and possibly incomplete.
+ */
 public record Address(
         List<String> streetLines,
         String postalCode,

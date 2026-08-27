@@ -3,13 +3,10 @@ package dev.sindic.enrollmenthub.contracts.domain;
 import java.util.Objects;
 
 /**
- * Enrollment data as submitted at intake, without the internal correlation id.
+ * Enrollment data as submitted, with the correlation id withheld — it is the producer's internal
+ * key and is not part of this contract. Consumers identify a decision by its {@code decisionId}.
  *
- * <p>This is the payload embedded in {@code EnrollmentDecisionEvent}. The decision-engine's
- * {@code enrollmentId} is its correlation-record primary key and is deliberately not published
- * downstream (ADR-17); consumers identify and deduplicate a decision by its {@code decisionId}.
- * {@link EnrollmentData} remains the id-carrying payload for the intake and check-request hops,
- * where the correlation id is required.
+ * @see EnrollmentData the id-carrying form
  */
 public record EnrollmentSnapshot(
         PaymentType paymentType,

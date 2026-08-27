@@ -4,75 +4,43 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Aggregates settled signals from a completed {@link EnrollmentProcess} into a
- * single {@link DecisionResult}.
+ * Aggregates a fully-settled signal map into a {@link DecisionResult} (ADR-14).
  *
- * <h2>Aggregation algorithm</h2>
- * The algorithm iterates over the process's signal map and dispatches on each
- * signal's {@link GateClassification}, accumulating two boolean flags:
- * <ul>
- *   <li>{@code rejected} — set when a {@link GateClassification#BEST_EFFORT} or
- *       {@link GateClassification#REQUIRED} signal settles with
- *       {@link SignalOutcome#FAILED}.</li>
- *   <li>{@code reviewRequired} — set when a {@link GateClassification#SCORING_SIGNAL}
- *       settles with {@link RiskLevel#HIGH} or {@link RiskLevel#EXTREME}.</li>
- * </ul>
- * At the end of the loop the flags are resolved in priority order:
+ * <p>One pass over the map dispatching on {@link GateClassification}, accumulating two flags —
+ * {@code rejected} (a {@code BEST_EFFORT} or {@code REQUIRED} signal settled
+ * {@link SignalOutcome#FAILED}) and {@code reviewRequired} (a {@code SCORING_SIGNAL} settled
+ * {@link RiskLevel#HIGH} or {@code EXTREME}) — resolved in priority order
  * {@code REJECTED} &gt; {@code CONDITIONAL_APPROVED} &gt; {@code APPROVED}.
  *
- * <h2>Fail-open behaviour</h2>
- * Signals with {@link SignalProcessingState#FAILED} (timeout or crash) contribute
- * nothing to either accumulator. No explicit fail-open branch is needed — absent
- * contributions are handled by omission.
+ * <p>Two properties hold by control flow rather than by assertion:
+ * <ul>
+ *   <li><b>A scoring signal cannot reject.</b> Its branch only ever sets {@code reviewRequired};
+ *       {@code rejected} is unreachable from there.</li>
+ *   <li><b>Fail-open is by omission.</b> A {@link SignalProcessingState#FAILED} signal (timeout or
+ *       crash) matches no accumulator condition, so no explicit branch is needed.</li>
+ * </ul>
  *
- * <h2>Asymmetric aggregation guarantee</h2>
- * {@link GateClassification#SCORING_SIGNAL} signals cannot drive
- * {@link DecisionResult#REJECTED}. This is enforced by control flow: the
- * {@code SCORING_SIGNAL} branch only sets {@code reviewRequired}; the
- * {@code rejected} accumulator is physically unreachable from that branch.
- *
- * <h2>{@code REQUIRED} classification</h2>
- * No current {@link SignalConfig} uses {@code REQUIRED}. The classification is
- * reserved for future signals (e.g. sanctions screening, regulated KYC) that must
- * be fail-closed. A {@code REQUIRED} signal never reaches aggregation in
- * {@link SignalProcessingState#FAILED} state: the timeout policy
- * ({@code EnrollmentService.applyTimeoutPolicy}, ADR-15) settles a still-PENDING
- * {@code REQUIRED} signal with {@link SignalOutcome#FAILED} rather than failing it
- * open, so aggregation always sees {@code SETTLED} and an explicit
- * {@link SignalOutcome#FAILED} drives {@link DecisionResult#REJECTED}. The
- * {@code SETTLED + FAILED} branch below is therefore the path a timed-out
- * {@code REQUIRED} signal takes; {@code OK} and {@code NO_RESULT} fail open as for
- * {@code BEST_EFFORT}.
+ * <p>No {@link SignalConfig} is {@code REQUIRED} today — the classification is reserved for
+ * fail-closed checks such as sanctions screening. Its branch is still required: the ADR-15 timeout
+ * policy settles a timed-out {@code REQUIRED} signal as {@code SETTLED + FAILED} rather than
+ * failing it open, so it arrives here as an explicit rejection.
  */
 public final class DecisionEngine {
 
     private DecisionEngine() {}
 
     /**
-     * Evaluates the given signal map and returns a decision.
+     * Evaluates the signal map and returns the decision.
      *
-     * @throws IllegalStateException            if any signal is still
-     *                                          {@link SignalProcessingState#PENDING}
-     * @throws AggregationPreconditionException if a signal is still
-     *                                          {@link SignalProcessingState#PENDING}
-     *                                          when aggregation runs — indicates a bug
-     *                                          in the completion predicate
+     * @throws AggregationPreconditionException (an {@link IllegalStateException}) if any signal is
+     *         still {@link SignalProcessingState#PENDING} — the caller's completion predicate is
+     *         broken, since only a fully-settled map may be evaluated
      */
     public static EnrollmentDecisionResult evaluate(Map<SignalConfig, SignalState> signals, UUID enrollmentId) {
-        if (!SignalConfig.allSettled(signals)) {
-            throw new IllegalStateException(
-                    "Cannot evaluate incomplete process " + enrollmentId);
-        }
-        return new EnrollmentDecisionResult(aggregate(signals));
+        return new EnrollmentDecisionResult(aggregate(signals, enrollmentId));
     }
 
-
-    /**
-     * Package-private to allow direct testing of the
-     * {@link AggregationPreconditionException} guard without bypassing
-     * the {@link #evaluate} completion check via reflection.
-     */
-    static DecisionResult aggregate(Map<SignalConfig, SignalState> signals) {
+    private static DecisionResult aggregate(Map<SignalConfig, SignalState> signals, UUID enrollmentId) {
         var rejected      = false;
         var reviewRequired = false;
 
@@ -82,7 +50,8 @@ public final class DecisionEngine {
 
             if (state.processingState() == SignalProcessingState.PENDING) {
                 throw new AggregationPreconditionException(
-                        "Aggregation triggered with pending signal: " + config.name());
+                        "Cannot evaluate incomplete enrollment " + enrollmentId
+                                + " — signal still pending: " + config.name());
             }
 
             switch (config.classification()) {
