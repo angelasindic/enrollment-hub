@@ -1,12 +1,12 @@
 package dev.sindic.enrollmenthub.decisionengine.domain;
 
 /**
- * Thrown when the aggregation loop is triggered while a signal is still
- * {@link SignalProcessingState#PENDING}. This should never happen in normal
- * operation — the completion predicate must fire only after all signals have
- * settled or failed.
+ * Thrown when {@link DecisionEngine#evaluate} is called with a signal still
+ * {@link SignalProcessingState#PENDING} — the caller's completion predicate fired early. An
+ * {@link IllegalStateException}, because that is what it is, and callers that catch the general
+ * type keep working.
  */
-public class AggregationPreconditionException extends RuntimeException {
+public class AggregationPreconditionException extends IllegalStateException {
 
     AggregationPreconditionException(String message) {
         super(message);

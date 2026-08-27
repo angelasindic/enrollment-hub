@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import java.time.Instant;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.UUID;
@@ -15,84 +14,75 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DecisionEngineTest {
 
-    private static final Instant NOW    = Instant.parse("2026-04-09T12:00:00Z");
-    private static final Instant TIMEOUT = NOW.plusSeconds(60);
-
-    private static EnrollmentCommand creditCardCommand() {
-        return new EnrollmentCommand(UUID.randomUUID(), PaymentType.CREDIT_CARD, null, null, null);
+    private static Map<SignalConfig, SignalState> signals(SignalConfig signal, SignalState state) {
+        var map = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
+        map.put(signal, state);
+        return map;
     }
 
-    private static EnrollmentCommand invoiceCommand() {
-        return new EnrollmentCommand(UUID.randomUUID(), PaymentType.INVOICE, null, null, null);
+    private static Map<SignalConfig, SignalState> signals(SignalConfig first, SignalState firstState,
+                                                          SignalConfig second, SignalState secondState) {
+        var map = signals(first, firstState);
+        map.put(second, secondState);
+        return map;
     }
 
     /** Credit card with both signals settled. */
-    private static EnrollmentProcess creditCard(SignalOutcome fraud, RiskLevel geo) {
-        return EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT)
-                .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud))
-                .withSignalResult(SignalConfig.GEO_SCORE,   SignalState.settled(geo));
+    private static Map<SignalConfig, SignalState> creditCard(SignalOutcome fraud, RiskLevel geo) {
+        return signals(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud),
+                       SignalConfig.GEO_SCORE,   SignalState.settled(geo));
     }
 
     /** Credit card with fraud settled, geo timed out (FAILED). */
-    private static EnrollmentProcess creditCardGeoFailed(SignalOutcome fraud) {
-        return EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT)
-                .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud))
-                .withSignalResult(SignalConfig.GEO_SCORE,   SignalState.failed());
+    private static Map<SignalConfig, SignalState> creditCardGeoFailed(SignalOutcome fraud) {
+        return signals(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud),
+                       SignalConfig.GEO_SCORE,   SignalState.failed());
     }
 
     /** Credit card with geo settled, fraud timed out (FAILED). */
-    private static EnrollmentProcess creditCardFraudFailed(RiskLevel geo) {
-        return EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT)
-                .withSignalResult(SignalConfig.GEO_SCORE,   SignalState.settled(geo))
-                .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.failed());
+    private static Map<SignalConfig, SignalState> creditCardFraudFailed(RiskLevel geo) {
+        return signals(SignalConfig.GEO_SCORE,   SignalState.settled(geo),
+                       SignalConfig.FRAUD_CHECK, SignalState.failed());
     }
 
     /** Invoice with fraud settled. */
-    private static EnrollmentProcess invoice(SignalOutcome fraud) {
-        return EnrollmentProcess.start(UUID.randomUUID(), invoiceCommand(), NOW, TIMEOUT)
-                .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud));
+    private static Map<SignalConfig, SignalState> invoice(SignalOutcome fraud) {
+        return signals(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud));
     }
 
-    /**
-     * Convenience adapter that lets the existing test bodies keep their
-     * {@link EnrollmentProcess}-centric phrasing even after the production API
-     * shifted to {@code (signals, enrollmentId)}.
-     */
-    private static EnrollmentDecisionResult evaluate(EnrollmentProcess process) {
-        return DecisionEngine.evaluate(process.signals(), process.enrollmentId());
+    private static EnrollmentDecisionResult evaluate(Map<SignalConfig, SignalState> signals) {
+        return DecisionEngine.evaluate(signals, UUID.randomUUID());
     }
 
-    // ── evaluate() guard ──────────────────────────────────────────────────────
+    // ── completeness guard ────────────────────────────────────────────────────
 
     @Test
     void evaluate_incompleteProcess_throwsIllegalState() {
-        var incomplete = EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT);
-        assertThatThrownBy(() -> evaluate(incomplete))
+        var enrollmentId = UUID.randomUUID();
+        var incomplete = SignalConfig.initializeFor(PaymentType.CREDIT_CARD);
+        assertThatThrownBy(() -> DecisionEngine.evaluate(incomplete, enrollmentId))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(incomplete.enrollmentId().toString());
+                .hasMessageContaining(enrollmentId.toString());
     }
 
     @Test
     void evaluate_incompleteInvoice_throwsIllegalState() {
-        var incomplete = EnrollmentProcess.start(UUID.randomUUID(), invoiceCommand(), NOW, TIMEOUT);
-        assertThatThrownBy(() -> evaluate(incomplete))
+        var incomplete = SignalConfig.initializeFor(PaymentType.INVOICE);
+        assertThatThrownBy(() -> DecisionEngine.evaluate(incomplete, UUID.randomUUID()))
                 .isInstanceOf(IllegalStateException.class);
     }
 
-    // ── aggregate() precondition guard ───────────────────────────────────────
-
     @Test
-    void aggregate_pendingSignalInMap_throwsPreconditionException() {
-        // Build a signal map where GEO_SCORE is still PENDING.
-        // aggregate() is package-private to allow this guard to be tested
-        // without bypassing the evaluate() completion check via reflection.
-        var signals = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
-        signals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-        signals.put(SignalConfig.GEO_SCORE,   SignalState.pending());
+    void evaluate_partiallySettledMap_namesTheOffendingSignal() {
+        // One signal settled, one still PENDING — the guard must identify which.
+        var enrollmentId = UUID.randomUUID();
+        var partial = signals(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK),
+                              SignalConfig.GEO_SCORE,   SignalState.pending());
 
-        assertThatThrownBy(() -> DecisionEngine.aggregate(signals))
+        assertThatThrownBy(() -> DecisionEngine.evaluate(partial, enrollmentId))
                 .isInstanceOf(AggregationPreconditionException.class)
-                .hasMessageContaining("GEO_SCORE");
+                .hasMessageContaining("GEO_SCORE")
+                .hasMessageContaining(enrollmentId.toString());
     }
 
     // ── CREDIT_CARD route ─────────────────────────────────────────────────────
@@ -171,10 +161,9 @@ class DecisionEngineTest {
         @Test
         void geoTimedOut_fraudFailed_rejected() {
             // Fraud FAILED outcome is explicit — REJECTED even though geo timed out
-            var process = EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT)
-                    .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.FAILED))
-                    .withSignalResult(SignalConfig.GEO_SCORE,   SignalState.failed());
-            assertThat(evaluate(process).decision()).isEqualTo(REJECTED);
+            var settled = signals(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.FAILED),
+                                  SignalConfig.GEO_SCORE,   SignalState.failed());
+            assertThat(evaluate(settled).decision()).isEqualTo(REJECTED);
         }
 
         @Test
@@ -203,18 +192,17 @@ class DecisionEngineTest {
 
         @Test
         void bothTimedOut_approved() {
-            var process = EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT)
-                    .withTimeout();
-            assertThat(evaluate(process).decision()).isEqualTo(APPROVED);
+            var timedOut = signals(SignalConfig.FRAUD_CHECK, SignalState.failed(),
+                                   SignalConfig.GEO_SCORE,   SignalState.failed());
+            assertThat(evaluate(timedOut).decision()).isEqualTo(APPROVED);
         }
 
         @Test
         void geoSettledWithoutResult_fraudOk_approved() {
             // Geocoding failure → settled without score → fail-open
-            var process = EnrollmentProcess.start(UUID.randomUUID(), creditCardCommand(), NOW, TIMEOUT)
-                    .withSignalResult(SignalConfig.GEO_SCORE,   SignalState.settledWithoutResult("geocoding_failed"))
-                    .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-            assertThat(evaluate(process).decision()).isEqualTo(APPROVED);
+            var settled = signals(SignalConfig.GEO_SCORE,   SignalState.settledWithoutResult("geocoding_failed"),
+                                  SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            assertThat(evaluate(settled).decision()).isEqualTo(APPROVED);
         }
     }
 
@@ -240,9 +228,8 @@ class DecisionEngineTest {
 
         @Test
         void fraudTimedOut_approved() {
-            var process = EnrollmentProcess.start(UUID.randomUUID(), invoiceCommand(), NOW, TIMEOUT)
-                    .withTimeout();
-            assertThat(evaluate(process).decision()).isEqualTo(APPROVED);
+            assertThat(evaluate(signals(SignalConfig.FRAUD_CHECK, SignalState.failed())).decision())
+                    .isEqualTo(APPROVED);
         }
     }
 

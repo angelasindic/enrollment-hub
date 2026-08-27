@@ -9,6 +9,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -22,10 +23,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * both handlers could read stale state and neither would detect completion.
  *
  * <p>Each handler follows the production flow per ADR-16 §Write path:
- * lock with {@code findByEnrollmentIdForUpdate}, compute the new signal map via
- * the immutable domain transition, persist via {@code repository.updateSignals},
- * and read the completion predicate off the just-computed state (not off the
- * stale in-memory entity).
+ * lock with {@code findByEnrollmentIdForUpdate}, record the result in a copy of the
+ * signal map, persist via {@code repository.updateSignals}, and read the completion
+ * predicate off the just-computed map (not off the stale in-memory entity).
  */
 class ConcurrentCompletionIT extends BaseIntegrationTest {
 
@@ -52,10 +52,10 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
                 txTemplate.executeWithoutResult(status -> {
                     var entity = repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
                     sleep(200);
-                    var updated = entity.toDomainForDecision()
-                            .withSignalResult(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
-                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated.signals()));
-                    geoSawComplete.set(updated.isComplete());
+                    var updated = new EnumMap<>(entity.getSignals());
+                    updated.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
+                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated));
+                    geoSawComplete.set(SignalConfig.allSettled(updated));
                 });
             } catch (Throwable t) {
                 geoError.set(t);
@@ -68,10 +68,10 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
                 txTemplate.executeWithoutResult(status -> {
                     var entity = repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
                     sleep(200);
-                    var updated = entity.toDomainForDecision()
-                            .withSignalResult(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated.signals()));
-                    fraudSawComplete.set(updated.isComplete());
+                    var updated = new EnumMap<>(entity.getSignals());
+                    updated.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated));
+                    fraudSawComplete.set(SignalConfig.allSettled(updated));
                 });
             } catch (Throwable t) {
                 fraudError.set(t);
@@ -91,7 +91,7 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
         assertThat(final_.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
                 .isEqualTo(SignalProcessingState.SETTLED);
         assertThat(final_.getSignals().get(SignalConfig.FRAUD_CHECK).outcome()).isEqualTo(SignalOutcome.OK);
-        assertThat(final_.isComplete()).isTrue();
+        assertThat(SignalConfig.allSettled(final_.getSignals())).isTrue();
 
         assertThat(geoSawComplete.get() ^ fraudSawComplete.get())
                 .as("Exactly one handler should observe completion, not both and not neither")

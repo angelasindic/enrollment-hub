@@ -281,8 +281,8 @@ JPA-mapped `Map` field. The architectural rationale (and the failure mode
 this protects against) lives in **ADR-16 §"Write path — explicit `UPDATE`
 for the JSON-mapped column"**. This section covers the JPA implementation.
 
-**Service flow.** The handler computes the new signal map via the immutable
-domain transition `EnrollmentProcess.withSignalResult(...)`, serialises it
+**Service flow.** The handler copies the entity's signal map, records the
+arriving result in the copy, serialises it
 via the injected `JsonMapper`, and calls `updateSignals(...)` inside the
 same `@Transactional` boundary that holds the row lock from ADR-16. The
 returned row count is asserted to be `1`; any other value throws — the row
@@ -364,11 +364,11 @@ These two behaviors map directly to SQL syntax options executed against PostgreS
 
 ### Correlation Record Domain Model
 
-The correlation record is modeled per ADR-14's Signal Classification Model. The
-domain is an immutable record (`EnrollmentProcess`); the JPA entity
-(`EnrollmentEntity`) holds the persisted state and exposes a read-only view of the
-domain. State transitions on the domain return new instances; the entity's in-place
-updates are localised to the persistence layer.
+The correlation record is modeled per ADR-14's Signal Classification Model. The JPA
+entity (`EnrollmentEntity`) holds the persisted state; the signal map it carries is the
+unit of domain state, and the domain types below describe that map's shape and
+aggregation metadata. The map is never mutated in place — the service layer computes a
+replacement and persists it by explicit `UPDATE` (ADR-16 §Write path).
 
 **Domain types** (`decision-engine/domain`):
 
@@ -380,7 +380,6 @@ updates are localised to the persistence layer.
 | `GateClassification`       | Aggregation metadata: `REQUIRED`, `BEST_EFFORT`, `SCORING_SIGNAL` (ADR-14)                          |
 | `SignalConfig`             | Enum of signals — declares applicable routes + classification (`GEO_SCORE`, `FRAUD_CHECK`)           |
 | `SignalState`              | Flat record: `(processingState, outcome, riskLevel, reason)` — serialises trivially to JSONB         |
-| `EnrollmentProcess`        | Immutable aggregate: `(enrollmentId, command, Map<<SignalConfig, SignalState>, createdAt, timeoutAt)` |
 | `DecisionResult`           | Domain decision: `APPROVED`, `REJECTED`, `CONDITIONAL_APPROVED`                                      |
 | `EnrollmentDecisionResult` | Wrapper carrying the `DecisionResult` returned from the engine                                       |
 
@@ -414,10 +413,10 @@ flowchart TD
     postCommit --> geo["Geo-Scoring<br/>consumes geo.score"]
     postCommit --> fraud["Fraud Detection<br/>consumes fraud.check"]
 
-    geo -- "GeoScoreResult" --> wGeo["withSignalResult(GEO_SCORE, SignalState)"]
-    fraud -- "FraudCheckResult" --> wFraud["withSignalResult(FRAUD_CHECK, SignalState)"]
+    geo -- "GeoScoreResult" --> wGeo["recordSignalResult(GEO_SCORE, SignalState)"]
+    fraud -- "FraudCheckResult" --> wFraud["recordSignalResult(FRAUD_CHECK, SignalState)"]
 
-    wGeo --> complete{"isComplete()?"}
+    wGeo --> complete{"SignalConfig.allSettled()?"}
     wFraud --> complete
 
     complete -- "false" --> wait["Wait for remaining signal"]
@@ -426,7 +425,7 @@ flowchart TD
     complete -- "true" --> decision["DecisionEngine.evaluate()<<br/>→ DecisionResult"]
     decision --> event["Publish EnrollmentDecisionEvent<br/>to enrollment.decisions"]
 
-    timeout["Scheduled poller<br/>deadline exceeded"] -.-> wTimeout["withTimeout()<<br/>PENDING → FAILED (fail-open)"]
+    timeout["Scheduled poller<br/>deadline exceeded"] -.-> wTimeout["applyTimeoutPolicy()<<br/>REQUIRED → settled FAILED (fail-closed)<br/>BEST_EFFORT / SCORING_SIGNAL → FAILED (fail-open)"]
     wTimeout -.-> complete
 
     style timeout stroke-dasharray: 5 5
@@ -436,19 +435,21 @@ flowchart TD
     style postCommit fill:#ffedd5,stroke:#c2410c
 ```
 
-**Completion predicate:** `isComplete()` returns `true` when every signal present
-in the map has settled (`processingState ≠ PENDING`). Signals not present in the
-map are by definition not applicable to the route and contribute nothing to the
-predicate.
+**Completion predicate:** `SignalConfig.allSettled(signals)` returns `true` when every
+signal present in the map has settled (`processingState ≠ PENDING`). Signals not present
+in the map are by definition not applicable to the route and contribute nothing to the
+predicate. `EnrollmentEntity.isComplete()` delegates to it.
 
-**Fact update methods on `EnrollmentProcess`:**
+**Signal-map transitions.** The map is the unit of state, and every transition replaces it
+wholesale rather than mutating it in place (ADR-16 §Write path). The transitions are applied
+by the service layer on the entity's map:
 
-| Method                                            | Trigger                                     | Effect                                                                            |
-|---------------------------------------------------|---------------------------------------------|-----------------------------------------------------------------------------------|
-| `start(enrollmentId, command, createdAt, timeoutAt)` | Intake listener after commit                | Builds process with `SignalConfig.initializeFor(paymentType)`                     |
-| `withSignalResult(SignalConfig, SignalState)`     | Signal result listener                      | Returns new process with the named signal's state replaced                        |
-| `withTimeout()`                                   | Scheduled timeout poller (ADR-15)          | Transitions all PENDING signals to FAILED (fail-open); leaves SETTLED unchanged   |
-| `isComplete()`                                    | After any transition                        | True when every applicable signal has settled (status ≠ PENDING)                  |
+| Transition                                | Applied by                                  | Effect                                                                                                                          |
+|-------------------------------------------|---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| `SignalConfig.initializeFor(paymentType)` | `EnrollmentEntity.create(...)` at intake    | Seeds the map with every applicable signal `PENDING`                                                                            |
+| copy-and-replace on the arriving signal   | `EnrollmentService.recordSignalResult`      | Records the result in a copy of the map; the copy is serialised and persisted by explicit `UPDATE`                              |
+| `applyTimeoutPolicy(signals)`             | `EnrollmentService.processExpiredTimeouts` (ADR-15) | Per classification: `REQUIRED` settles with outcome `FAILED` (fail-closed); `BEST_EFFORT` / `SCORING_SIGNAL` become `FAILED` (fail-open). Terminal signals unchanged |
+| `SignalConfig.allSettled(signals)`        | After any transition                        | True when every applicable signal has settled (`processingState ≠ PENDING`)                                                     |
 
 **Design decisions:**
 
@@ -460,9 +461,9 @@ predicate.
   is no `NOT_APPLICABLE` enum value. `NO_RESULT` outcomes and null `riskLevel`
   represent "settled but no value" — no `NOT_AVAILABLE` sentinel on the result
   enums.
-- **Immutable domain updates.** `with*()` methods on `EnrollmentProcess` return a
-  new aggregate. The JPA entity mutates internally for Hibernate's dirty-tracking;
-  the domain record stays read-only.
+- **Whole-map replacement over in-place mutation.** A transition builds a new signal
+  map and persists it by explicit `UPDATE`; the JSONB column is never dirty-tracked.
+  ADR-16 §Write path covers the failure mode this avoids.
 - **Compatibility with contracts module.** Domain result enums (`SignalOutcome`,
   `RiskLevel`, `DecisionResult`) are a subset of the contracts enums. The contract
   enums may carry additional values that the decision-engine domain does not need.
@@ -484,7 +485,7 @@ is also decision-engine-internal — it flows only between the REST endpoint and
 
 ### Decision Engine
 
-`DecisionEngine.evaluate(EnrollmentProcess)` takes a completed correlation record
+`DecisionEngine.evaluate(signals, enrollmentId)` takes a fully-settled signal map
 and returns an `EnrollmentDecisionResult`. It is a pure domain function — no Spring
 dependencies, no I/O. After evaluation, the service layer maps the result to the
 contracts `EnrollmentDecisionEvent` and publishes it to `enrollment.decisions`.

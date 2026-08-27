@@ -1,21 +1,13 @@
 package dev.sindic.enrollmenthub.decisionengine.domain;
 
 /**
- * Processing lifecycle and settled result of a single signal in the scatter-gather pipeline.
+ * Processing lifecycle and settled result of one signal (ADR-14).
  *
- * <p>Stored as part of a {@code Map<SignalConfig, SignalState>} JSONB column on the
- * correlation record. The flat record serialises trivially to JSONB without
- * Jackson type discriminators.
- *
- * <p>Which result field is meaningful is determined by the signal's classification:
- * <ul>
- *   <li>Check-style signals ({@link GateClassification#BEST_EFFORT}/{@code REQUIRED})
- *       populate {@code outcome}; {@code riskLevel} is null.</li>
- *   <li>Score-style signals ({@link GateClassification#SCORING_SIGNAL})
- *       populate {@code riskLevel}; {@code outcome} is null.</li>
- * </ul>
- * Both fields are null when the signal settled without producing a result,
- * or when {@code processingState} is {@link SignalProcessingState#FAILED}.
+ * <p>Two flat result fields rather than a sealed hierarchy, so the enclosing
+ * {@code Map<SignalConfig, SignalState>} serialises to JSONB without type discriminators.
+ * Which field is meaningful follows the signal's {@link GateClassification}: check-style
+ * signals populate {@code outcome}, score-style signals populate {@code riskLevel}. Both are
+ * null when the signal settled without a result, or when it FAILED.
  *
  * @param processingState workflow lifecycle — did the signal run?
  * @param outcome         non-null when SETTLED for check-style signals

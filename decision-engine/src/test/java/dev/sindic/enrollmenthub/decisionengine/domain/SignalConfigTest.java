@@ -66,6 +66,12 @@ class SignalConfigTest {
         }
 
         @Test
+        void falseAtCreationOnTheInvoiceRoute() {
+            var signals = SignalConfig.initializeFor(PaymentType.INVOICE);
+            assertThat(SignalConfig.allSettled(signals)).isFalse();
+        }
+
+        @Test
         void trueWhenAllSignalsAreSettled() {
             var signals = SignalConfig.initializeFor(PaymentType.CREDIT_CARD);
             signals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));

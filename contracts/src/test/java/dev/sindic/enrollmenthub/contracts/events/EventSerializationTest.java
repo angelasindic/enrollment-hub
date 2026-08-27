@@ -74,50 +74,6 @@ class EventSerializationTest {
         assertThrows(NullPointerException.class, () -> new FraudCheckRequest(null));
     }
 
-    // ── EnrollmentEvent ───────────────────────────────────────────────────────
-
-    @Test
-    void enrollmentEvent_roundTrip() throws Exception {
-        var original = new EnrollmentEvent(FIXED_CREATED_AT, enrollmentData(PaymentType.CREDIT_CARD));
-        var json = mapper.writeValueAsString(original);
-        var deserialized = mapper.readValue(json, EnrollmentEvent.class);
-        assertEquals(original, deserialized);
-    }
-
-    @Test
-    void enrollmentEvent_invoiceRoute_roundTrip() throws Exception {
-        var original = new EnrollmentEvent(FIXED_CREATED_AT, enrollmentData(PaymentType.INVOICE));
-        var json = mapper.writeValueAsString(original);
-        var deserialized = mapper.readValue(json, EnrollmentEvent.class);
-        assertEquals(original, deserialized);
-    }
-
-    @Test
-    void enrollmentEvent_nullCreatedAt_throws() {
-        assertThrows(NullPointerException.class,
-                () -> new EnrollmentEvent(null, enrollmentData(PaymentType.INVOICE)));
-    }
-
-    @Test
-    void enrollmentEvent_nullEnrollmentData_throws() {
-        assertThrows(NullPointerException.class,
-                () -> new EnrollmentEvent(FIXED_CREATED_AT, null));
-    }
-
-    @Test
-    void enrollmentEvent_unknownFieldsIgnored() throws Exception {
-        String json = """
-                {"createdAt":"2026-05-23T10:00:00Z",
-                 "enrollmentData":{"enrollmentId":"%s",
-                                "paymentType":"CREDIT_CARD",
-                                "person":{"emailAddress":"test@example.com"},
-                                "shippingAddress":{"countryCode":"DE"},
-                                "billingAddress":{"countryCode":"DE"}},
-                 "unknownFutureField":"ignored"}
-                """.formatted(UUID.randomUUID());
-        assertDoesNotThrow(() -> mapper.readValue(json, EnrollmentEvent.class));
-    }
-
     // ── EnrollmentData ────────────────────────────────────────────────────────
 
     @Test

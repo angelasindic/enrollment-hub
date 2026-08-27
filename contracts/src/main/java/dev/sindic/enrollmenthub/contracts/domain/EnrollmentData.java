@@ -3,6 +3,7 @@ package dev.sindic.enrollmenthub.contracts.domain;
 import java.util.Objects;
 import java.util.UUID;
 
+/** Enrollment payload carrying its correlation id. */
 public record EnrollmentData(
         UUID enrollmentId,
         PaymentType paymentType,

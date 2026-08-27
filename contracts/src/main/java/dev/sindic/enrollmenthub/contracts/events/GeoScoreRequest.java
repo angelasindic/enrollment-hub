@@ -6,10 +6,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Command dispatched by the decision-engine to geo-scoring on the {@code enrollment.check.request}
- * exchange (routing key {@code geo.score}). Least-privilege payload — geo-scoring needs only the
- * shipping address to geocode and the {@code enrollmentId} to correlate; no other enrollment data
- * is shared.
+ * Command requesting a geo-density check. Deliberately least-privilege: the shipping address to
+ * geocode and the id to correlate the reply, and nothing else of the enrollment.
  */
 public record GeoScoreRequest(
         UUID enrollmentId,

@@ -1,6 +1,6 @@
 package dev.sindic.enrollmenthub.contracts.domain;
 
-/** Routing discriminator — determines which primary check activates (see §5.2). */
+/** How the applicant intends to pay. Which checks a value implies is not defined by this contract. */
 public enum PaymentType {
     CREDIT_CARD,
     INVOICE

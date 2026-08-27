@@ -3,8 +3,7 @@ package dev.sindic.enrollmenthub.decisionengine.domain;
 import java.util.Objects;
 
 /**
- * Result of evaluating a completed {@link EnrollmentProcess} through the
- * {@link DecisionEngine}.
+ * Result of evaluating a fully-settled signal map through the {@link DecisionEngine}.
  */
 public record EnrollmentDecisionResult(DecisionResult decision) {
 

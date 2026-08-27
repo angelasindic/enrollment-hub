@@ -275,7 +275,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
             entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
 
-            assertThat(entity.isComplete()).isTrue();
+            assertThat(SignalConfig.allSettled(entity.getSignals())).isTrue();
         }
 
         @Test
@@ -284,7 +284,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
             entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
 
-            assertThat(entity.isComplete()).isFalse();
+            assertThat(SignalConfig.allSettled(entity.getSignals())).isFalse();
         }
 
         @Test
@@ -293,7 +293,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             var entity = TestEntityFactory.invoice(UUID.randomUUID(), NOW, TIMEOUT);
             entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
 
-            assertThat(entity.isComplete()).isTrue();
+            assertThat(SignalConfig.allSettled(entity.getSignals())).isTrue();
         }
     }
 

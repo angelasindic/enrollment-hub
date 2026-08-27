@@ -11,6 +11,10 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * Canonicalises addresses via libpostal (ADR-10) so that two spellings of the same address produce
+ * one geocoding cache key.
+ */
 @Slf4j
 @Service
 public class AddressNormalizationService {

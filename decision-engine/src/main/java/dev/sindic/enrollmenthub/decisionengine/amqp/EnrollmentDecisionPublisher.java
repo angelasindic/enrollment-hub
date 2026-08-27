@@ -8,29 +8,19 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Publishes {@link EnrollmentDecisionEvent} to the {@code enrollment.decisions}
- * topic exchange (decision-engine/design.md §Exchange and queue topology (Outbound)) with routing key
- * {@link AmqpConfig#DECISION_ROUTING_KEY}. The decision-engine is the sole publisher
- * on this exchange; the account-service owns the consumer queue and its binding.
+ * Publishes {@link EnrollmentDecisionEvent} to the {@code enrollment.decisions} topic exchange.
+ * Sole publisher; the account service owns the consumer queue and its binding (ADR-13
+ * §Channel Ownership).
  *
- * <p>Uses the channel-scoped {@code invoke + waitForConfirmsOrDie} pattern so
- * three failure modes all surface as exceptions to the caller:
- * <ul>
- *   <li><b>Nack / lost ack</b> — {@code waitForConfirmsOrDie} throws.</li>
- *   <li><b>Unroutable</b> — the broker returns the message; this method throws
- *       {@link AmqpException} after the wait.</li>
- *   <li><b>Serialization / connection errors</b> — propagate naturally.</li>
- * </ul>
+ * <p>Channel-scoped {@code invoke + waitForConfirmsOrDie}, so a nack, a lost ack, an unroutable
+ * return, or a connection error all reach the caller as an exception. That matters more here than
+ * elsewhere: {@code DecisionDispatcher} stamps {@code dispatched_at} only if this method returns
+ * normally, so a swallowed failure would mark an undelivered decision as delivered (ADR-17).
  *
- * <p><b>Rollout caveat.</b> {@link AmqpConfig} sets {@code mandatory=true} on the
- * {@link RabbitTemplate}: a publish to this exchange with no queue bound for the
- * routing key will be returned by the broker and surface as an {@link AmqpException}
- * from this method. The account-service team must declare a binding on
- * {@link AmqpConfig#DECISION_EXCHANGE} for routing key
- * {@link AmqpConfig#DECISION_ROUTING_KEY} before this publisher is exercised in
- * production. The change must be coordinated; merging this without the downstream
- * binding will cause every completed enrollment to fail the publish step and
- * trigger redelivery loops until the binding lands.
+ * <p><b>Rollout caveat.</b> {@code mandatory=true} means a publish with no queue bound for
+ * {@link AmqpConfig#DECISION_ROUTING_KEY} is returned and throws. The account-service binding must
+ * land before this path is exercised in production, or every decided enrollment fails its publish
+ * and falls to the relay until it does.
  */
 @Slf4j
 @Component

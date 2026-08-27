@@ -4,7 +4,7 @@ import dev.sindic.enrollmenthub.contracts.domain.Address;
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
+import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentEvent;
 import dev.sindic.enrollmenthub.contracts.events.GeoScoreRequest;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;

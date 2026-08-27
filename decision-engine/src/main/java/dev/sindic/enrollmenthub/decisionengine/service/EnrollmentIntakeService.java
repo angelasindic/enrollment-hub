@@ -1,7 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
+import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.amqp.CheckRequestPublisher;
 import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentIntakePublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
@@ -9,24 +9,25 @@ import dev.sindic.enrollmenthub.decisionengine.domain.PendingEnrollmentResponse;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 
 /**
- * Service handling enrollment flow.
+ * Scatter half of the scatter-gather pipeline — accepts an enrollment and dispatches one
+ * command per applicable signal.
  *
- * <p>The {@code originalRequest} is serialised to a JSON string once at intake
- * and stored verbatim in the correlation record. At decision time it is mapped
- * into the {@code EnrollmentSnapshot} embedded in {@code EnrollmentDecisionEvent}
- * — without the correlation {@code enrollmentId}, which is not carried on the
- * {@code EnrollmentDecisionEvent} (a fresh {@code decisionId} is published instead;
- * ADR-17 §Amendment). Internally the {@code enrollmentId} is still the correlation
- * key across the scatter-gather and is returned to the caller in the 202.
+ * <p>Two entry points, deliberately split by ADR-13 §Ingress Inversion:
+ * {@link #receiveEnrollment} answers the REST caller and does nothing but publish, so intake
+ * durability is the broker's; {@link #processEnrollment} runs off that message and owns the
+ * database work.
+ *
+ * <p>{@code enrollmentId} is the correlation key across the scatter-gather and is returned to
+ * the caller in the 202, but it is not carried on {@code EnrollmentDecisionEvent} — a fresh
+ * {@code decisionId} is published instead (ADR-17 §Amendment).
+ *
+ * @see EnrollmentService gather half — signal results, decision, emission
  */
 @Service
 @Slf4j
@@ -37,9 +38,8 @@ public class EnrollmentIntakeService {
     private final CheckRequestPublisher checkRequestPublisher;
     private final Clock clock;
 
-    public EnrollmentIntakeService(
-            EnrollmentCorrelationService correlationService,
-            EnrollmentIntakePublisher intakePublisher,
+    public EnrollmentIntakeService(EnrollmentCorrelationService correlationService,
+                                   EnrollmentIntakePublisher intakePublisher,
                                    CheckRequestPublisher checkRequestPublisher,
                                    Clock clock) {
         this.correlationService = correlationService;
@@ -49,9 +49,9 @@ public class EnrollmentIntakeService {
     }
 
     /**
-     * REST entry point — publishes to {@code enrollment.intake} for broker-backed
-     * durability. No DB writes here; the correlation record is created by {@code EnrollmentIntakeListener}
-     * after the broker delivers the intake message to {@link #processEnrollment(Instant, EnrollmentCommand)}.
+     * REST entry point. Publishes to {@code enrollment.intake} and returns; no database write
+     * happens here, the correlation record is created once the broker delivers that message to
+     * {@link #processEnrollment}.
      */
     public PendingEnrollmentResponse receiveEnrollment(EnrollmentCommand command) {
         MDC.put("enrollmentId", command.enrollmentId().toString());
@@ -66,29 +66,16 @@ public class EnrollmentIntakeService {
     }
 
     /**
-     * Listener entry point. Non-transactional. Implements the consumer-side idempotency
-     * ledger of ADR-13 §Ingress Inversion as a {@code PENDING → COMPLETED} state machine,
-     * with each step in its own transaction so the boundary stays narrower than the
-     * listener method.
+     * Listener entry point, implementing the consumer-side idempotency ledger of
+     * ADR-13 §Ingress Inversion as a {@code PENDING → COMPLETED} state machine: insert the row,
+     * dispatch one command per applicable signal, then mark COMPLETED.
      *
-     * <p>Step 1 — Insert PENDING: {@link EnrollmentCorrelationService#saveIfAbsent}
-     * commits the correlation record, guarded by the {@code enrollment_id} unique
-     * constraint. It returns {@code true} on a fresh insert and {@code false} on a
-     * broker redelivery.
-     *
-     * <p>Step 2 — Read the ledger on redelivery: a redelivered message already in
-     * {@code COMPLETED} state is acknowledged without re-dispatching. A redelivery still
-     * in {@code PENDING} state fell through a crash before the publish completed, so it
-     * is retried.
-     *
-     * <p>Step 3 — Idempotent downstream publish: one command per applicable signal. A
-     * failure here throws, the Spring AMQP container NACKs the intake message, and the
-     * broker redelivers into the PENDING branch above.
-     *
-     * <p>Step 4 — Transition to COMPLETED: committed before the listener acknowledges
-     * the intake message. A crash between the publish and this commit redelivers into the
-     * PENDING branch, which re-dispatches and relies on downstream idempotency to absorb
-     * the duplicate.
+     * <p>Deliberately non-transactional, with each step committing separately, so the database
+     * boundary stays narrower than the listener method and the ledger records real progress
+     * rather than rolling back with it. Every crash window lands somewhere recoverable — a
+     * redelivery finds COMPLETED and acknowledges without re-dispatching, or finds PENDING and
+     * re-dispatches, relying on downstream idempotency to absorb the duplicate. A publish failure
+     * throws, the container NACKs, and the broker redelivers into that same PENDING branch.
      */
     public void processEnrollment(Instant createdAt, EnrollmentCommand command) {
 

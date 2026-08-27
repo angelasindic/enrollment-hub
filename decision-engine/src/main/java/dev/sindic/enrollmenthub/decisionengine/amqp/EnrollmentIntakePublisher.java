@@ -1,6 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.amqp;
 
-import dev.sindic.enrollmenthub.contracts.events.EnrollmentEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
@@ -8,20 +7,12 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
 /**
+ * Publishes {@link EnrollmentEvent} to the {@code enrollment.intake} direct exchange, so intake
+ * durability is the broker's rather than the request thread's (ADR-13 §Ingress Inversion).
  *
- * Publishes {@link EnrollmentEvent} events to the {@code enrollment.intake} direct exchange.
- *
- * <p>Uses the channel-scoped {@code invoke + waitForConfirmsOrDie} pattern so
- * three failure modes all surface as exceptions to the caller:
- * <ul>
- *   <li><b>Nack / lost ack</b> — {@code waitForConfirmsOrDie} throws.</li>
- *   <li><b>Unroutable</b> (bad exchange / routing key / missing binding) — the
- *       broker returns the message; the return is attached to the per-publish
- *       {@link CorrelationData} before the ack and this method throws
- *       {@link AmqpException} after the wait.</li>
- *   <li><b>Serialization / connection errors</b> — propagate naturally.</li>
- * </ul>
- * Consumers dedup by {@code enrollmentId} (Idempotent Receiver — ADR-06 §Delivery Semantics).
+ * <p>Channel-scoped {@code invoke + waitForConfirmsOrDie}, so a nack, a lost ack, an unroutable
+ * return, or a connection error all reach the caller as an exception rather than a silent drop.
+ * Consumers dedup by {@code enrollmentId} (ADR-13).
  */
 @Slf4j
 @Component

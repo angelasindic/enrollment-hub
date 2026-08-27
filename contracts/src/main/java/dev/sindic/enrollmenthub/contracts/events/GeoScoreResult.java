@@ -6,15 +6,13 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Published by geo-scoring, consumed by the decision-engine.
+ * Result of the geo-density check. Owned by geo-scoring.
  *
- * <p>{@code riskLevel} is {@code null} when geocoding failed and no density
- * measurement could be produced. In that case {@code noResultReason} is
- * non-null. The decision-engine maps a null {@code riskLevel} to a
- * {@code SETTLED + NO_RESULT} signal state (fail-open).
+ * <p>A null {@code riskLevel} means no density measurement was possible and {@code noResultReason}
+ * says why — a distinct condition from any {@link SignalOutcome}, which this event does not carry.
  *
- * <p>{@link RiskLevel#EXTREME} indicates density saturation — at least one
- * GEOSEARCH radius hit the COUNT 200 result cap.
+ * <p>{@link RiskLevel#EXTREME} means the measurement saturated: a search hit its result cap, so the
+ * true neighbour count is unknown and at least as high as reported.
  */
 public record GeoScoreResult(
         UUID enrollmentId,

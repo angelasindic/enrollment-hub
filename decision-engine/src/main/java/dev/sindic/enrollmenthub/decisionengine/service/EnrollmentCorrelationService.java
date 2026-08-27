@@ -18,9 +18,9 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Idempotent correlation-record persistence.
- *
- * Insert a new correlation record and commit, or detect a duplicate and return silently.
+ * Correlation-record writes for the intake path, each in its own short transaction so the
+ * listener's database boundary stays narrow (ADR-13 §Ingress Inversion): insert the record, read
+ * the intake ledger, advance it to COMPLETED.
  */
 @Service
 @Slf4j
@@ -39,12 +39,10 @@ public class EnrollmentCorrelationService {
     }
 
     /**
-     * Persists the correlation record if it does not already exist. Returns whether
-     * this call performed the insert, following the {@link java.util.Set#add} convention
-     * (the boolean reports whether state changed).
+     * Persists the correlation record if absent, reporting whether state changed
+     * ({@link java.util.Set#add} convention).
      *
-     * @return {@code true} if a new record was inserted;
-     *         {@code false} if the record already existed (idempotent redelivery)
+     * @return {@code true} if this call inserted; {@code false} on an idempotent redelivery
      */
     //TODO hardcoded timeout
     @Transactional(timeout = 10)
@@ -86,10 +84,8 @@ public class EnrollmentCorrelationService {
     }
 
     /**
-     * Reads the intake ledger state (ADR-13 §Ingress Inversion). Returns {@code true}
-     * only when the record exists and its commands have already been dispatched, the
-     * signal the consumer uses to acknowledge a redelivered intake message without
-     * re-dispatching.
+     * {@code true} only when the record exists and its commands were already dispatched — the
+     * consumer's cue to acknowledge a redelivered intake message without re-dispatching.
      */
     public boolean isIntakeCompleted(UUID enrollmentId) {
         return repository.findIntakeStatus(enrollmentId)
@@ -98,10 +94,9 @@ public class EnrollmentCorrelationService {
     }
 
     /**
-     * Transitions the intake ledger {@code PENDING → COMPLETED} in its own transaction,
-     * committed before the intake message is acknowledged. A row count other than one
-     * means the correlation record was not found, which is logged rather than thrown
-     * because the dispatch it records has already succeeded.
+     * Advances the intake ledger to COMPLETED, committed before the intake message is
+     * acknowledged. A row count other than one means the record is gone; logged rather than
+     * thrown, because the dispatch this records has already succeeded.
      */
     @Transactional(timeout = 10)
     public void markIntakeCompleted(UUID enrollmentId) {

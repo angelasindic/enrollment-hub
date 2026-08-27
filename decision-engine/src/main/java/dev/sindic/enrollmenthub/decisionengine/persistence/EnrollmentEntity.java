@@ -1,8 +1,6 @@
 package dev.sindic.enrollmenthub.decisionengine.persistence;
 
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
-import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
-import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentProcess;
 import dev.sindic.enrollmenthub.decisionengine.domain.IntakeStatus;
 import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
@@ -22,25 +20,15 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * JPA entity for the {@code enrollment_hub.enrollments} correlation table.
+ * JPA entity for the {@code enrollment_hub.enrollments} correlation table — a read projection
+ * only. Every write is an explicit statement on {@link EnrollmentRepository} (ADR-16 §Write path),
+ * and a loaded instance is deliberately not re-read afterwards: the new state was the input to
+ * that {@code UPDATE}, not something to fetch back.
  *
- * <p>Read-only projection. All writes go through {@link EnrollmentRepository}:
- * partial transitions through {@code updateSignals(...)} (signals-only UPDATE)
- * and the terminal transition through {@code completeWithDecision(...)}
- * (signals + decision columns in one UPDATE) per ADR-16 §Write path.
- * The in-memory copy of an entity that the service path loaded is intentionally
- * not re-read after those updates — the new state is the application's input
- * to the {@code UPDATE}, not a value to be re-fetched.
- *
- * <p>{@code originalRequest} stores the full enrollment data submitted at intake;
- * it is persisted so the decision event can carry it to downstream consumers
- * without a separate lookup. This column is never mutated post-INSERT.
- *
- * <p>{@code decisionId} is a freshly generated UUID set when the decision is
- * recorded. It is published in {@code EnrollmentDecisionEvent} instead of
- * {@code enrollmentId} to avoid exposing the internal primary key.
- *
- * @see EnrollmentProcess
+ * <p>Two columns exist to serve the ADR-17 outbox rather than the decision itself:
+ * {@code originalRequest}, written once at intake so a replay can rebuild the decision event
+ * without a second lookup, and {@code decisionId}, generated at decide time and published in
+ * place of the {@code enrollmentId} primary key.
  */
 @Entity
 @Table(name = "enrollments", schema = "enrollment_hub")
@@ -111,19 +99,6 @@ public class EnrollmentEntity {
                 enrollmentId, paymentType, originalRequest,
                 SignalConfig.initializeFor(paymentType),
                 createdAt, timeoutAt);
-    }
-
-    public boolean isComplete() {
-        return SignalConfig.allSettled(signals);
-    }
-
-    public EnrollmentProcess toDomainForDecision() {
-        // this has to be refactored!!!!!
-        return toDomain(new EnrollmentCommand(UUID.randomUUID(), paymentType, null, null, null));
-    }
-
-    public EnrollmentProcess toDomain(EnrollmentCommand command) {
-        return new EnrollmentProcess(enrollmentId, command, signals, createdAt, timeoutAt);
     }
 
     // --- Getters ---
