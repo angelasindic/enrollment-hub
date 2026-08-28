@@ -77,26 +77,27 @@ public class EnrollmentIntakeService {
      * re-dispatches, relying on downstream idempotency to absorb the duplicate. A publish failure
      * throws, the container NACKs, and the broker redelivers into that same PENDING branch.
      */
-    public void processEnrollment(Instant createdAt, EnrollmentCommand command) {
+    public void processEnrollment(Instant createdAt, EnrollmentData enrollmentData) {
 
-        MDC.put("enrollmentId", command.enrollmentId().toString());
+        var enrollmentId = enrollmentData.enrollmentId();
+        MDC.put("enrollmentId", enrollmentId.toString());
         try {
-            boolean inserted = correlationService.saveIfAbsent(createdAt, command);
+            boolean inserted = correlationService.saveIfAbsent(createdAt, enrollmentData);
 
-            if (!inserted && correlationService.isIntakeCompleted(command.enrollmentId())) {
+            if (!inserted && correlationService.isIntakeCompleted(enrollmentId)) {
                 log.info("Intake already completed for enrollmentId={}; acknowledging duplicate without re-dispatch",
-                        command.enrollmentId());
+                        enrollmentId);
                 return;
             }
             if (!inserted) {
                 log.info("Intake redelivered in PENDING state for enrollmentId={}; retrying command dispatch",
-                        command.enrollmentId());
+                        enrollmentId);
             }
 
-            EnrollmentData enrollmentData = EnrollmentMapper.toData(command);
-            checkRequestPublisher.dispatch(enrollmentData, SignalConfig.applicableSignals(command.paymentType()));
+            var paymentType = EnrollmentMapper.toDomainPaymentType(enrollmentData.paymentType());
+            checkRequestPublisher.dispatch(enrollmentData, SignalConfig.applicableSignals(paymentType));
 
-            correlationService.markIntakeCompleted(command.enrollmentId());
+            correlationService.markIntakeCompleted(enrollmentId);
 
         } finally {
             MDC.remove("enrollmentId");

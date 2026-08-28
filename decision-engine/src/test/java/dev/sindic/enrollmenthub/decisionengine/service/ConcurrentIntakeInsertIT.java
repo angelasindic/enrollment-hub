@@ -73,7 +73,7 @@ class ConcurrentIntakeInsertIT extends BaseIntegrationTest {
                             if (!start.await(10, TimeUnit.SECONDS)) {
                                 throw new IllegalStateException("start latch not released within 10s");
                             }
-                            if (correlationService.saveIfAbsent(CREATED_AT, command)) {
+                            if (correlationService.saveIfAbsent(CREATED_AT, EnrollmentMapper.toData(command))) {
                                 inserted.incrementAndGet();
                             } else {
                                 redelivered.incrementAndGet();

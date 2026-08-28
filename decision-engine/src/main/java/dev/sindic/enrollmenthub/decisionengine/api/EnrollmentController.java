@@ -103,7 +103,7 @@ public class EnrollmentController {
     }
 
     private static boolean requiresCreditCardCheck(EnrollmentRequest request) {
-        return request.paymentType() == dev.sindic.enrollmenthub.contracts.domain.PaymentType.CREDIT_CARD;
+        return request.paymentType() == EnrollmentRequest.PaymentTypeDto.CREDIT_CARD;
     }
 
     EnrollmentCommand createDomainRequest(EnrollmentRequest request) {
