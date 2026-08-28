@@ -110,44 +110,44 @@ class EnrollmentIntakeServiceTest {
 
         @Test
         void firstDelivery_persistsPending_dispatches_thenMarksCompleted_creditCard() {
-            var command = creditCardCommand();
+            var data = EnrollmentMapper.toData(creditCardCommand());
             given(correlationService.saveIfAbsent(any(), any())).willReturn(true); // fresh insert (PENDING)
 
-            buildService().processEnrollment(NOW, command);
+            buildService().processEnrollment(NOW, data);
 
-            then(correlationService).should().saveIfAbsent(NOW, command);
+            then(correlationService).should().saveIfAbsent(NOW, data);
             then(intakePublisher).should(never()).publish(any());
             var dataCaptor = ArgumentCaptor.forClass(EnrollmentData.class);
             then(checkRequestPublisher).should().dispatch(dataCaptor.capture(), any());
             assertThat(dataCaptor.getValue().paymentType().name()).isEqualTo("CREDIT_CARD");
-            then(correlationService).should().markIntakeCompleted(command.enrollmentId());
+            then(correlationService).should().markIntakeCompleted(data.enrollmentId());
         }
 
         @Test
         void firstDelivery_dispatches_thenMarksCompleted_invoice() {
-            var command = invoiceCommand();
+            var data = EnrollmentMapper.toData(invoiceCommand());
             given(correlationService.saveIfAbsent(any(), any())).willReturn(true);
 
-            buildService().processEnrollment(NOW, command);
+            buildService().processEnrollment(NOW, data);
 
             var dataCaptor = ArgumentCaptor.forClass(EnrollmentData.class);
             then(checkRequestPublisher).should().dispatch(dataCaptor.capture(), any());
             assertThat(dataCaptor.getValue().paymentType().name()).isEqualTo("INVOICE");
-            then(correlationService).should().markIntakeCompleted(command.enrollmentId());
+            then(correlationService).should().markIntakeCompleted(data.enrollmentId());
         }
 
         @Test
         void redeliveredIntake_stillPending_retriesDispatch_andMarksCompleted() {
             // A prior delivery crashed before completing the ledger, so it stays PENDING:
             // the consumer re-dispatches and then transitions the ledger to COMPLETED.
-            var command = creditCardCommand();
+            var data = EnrollmentMapper.toData(creditCardCommand());
             given(correlationService.saveIfAbsent(any(), any())).willReturn(false);
-            given(correlationService.isIntakeCompleted(command.enrollmentId())).willReturn(false);
+            given(correlationService.isIntakeCompleted(data.enrollmentId())).willReturn(false);
 
-            buildService().processEnrollment(NOW, command);
+            buildService().processEnrollment(NOW, data);
 
             then(checkRequestPublisher).should().dispatch(any(), any());
-            then(correlationService).should().markIntakeCompleted(command.enrollmentId());
+            then(correlationService).should().markIntakeCompleted(data.enrollmentId());
             then(intakePublisher).should(never()).publish(any());
         }
 
@@ -155,11 +155,11 @@ class EnrollmentIntakeServiceTest {
         void redeliveredIntake_completed_acknowledgesWithoutDispatch() {
             // The prior delivery completed the ledger: this redelivery is a duplicate and
             // is acknowledged with no downstream publish and no further ledger write.
-            var command = creditCardCommand();
+            var data = EnrollmentMapper.toData(creditCardCommand());
             given(correlationService.saveIfAbsent(any(), any())).willReturn(false);
-            given(correlationService.isIntakeCompleted(command.enrollmentId())).willReturn(true);
+            given(correlationService.isIntakeCompleted(data.enrollmentId())).willReturn(true);
 
-            buildService().processEnrollment(NOW, command);
+            buildService().processEnrollment(NOW, data);
 
             then(checkRequestPublisher).should(never()).dispatch(any(), any());
             then(correlationService).should(never()).markIntakeCompleted(any());
@@ -169,7 +169,7 @@ class EnrollmentIntakeServiceTest {
         void correlationServiceFailurePropagates_andNothingDispatched() {
             doThrow(new RuntimeException("DB down")).when(correlationService).saveIfAbsent(any(), any());
 
-            assertThatThrownBy(() -> buildService().processEnrollment(NOW, creditCardCommand()))
+            assertThatThrownBy(() -> buildService().processEnrollment(NOW, EnrollmentMapper.toData(creditCardCommand())))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessage("DB down");
 
@@ -181,11 +181,11 @@ class EnrollmentIntakeServiceTest {
         void dispatchFailurePropagates_andLedgerLeftPending() {
             // The dispatch throws after the PENDING insert. The ledger is not transitioned,
             // so a later redelivery retries; the COMPLETED write never runs.
-            var command = creditCardCommand();
+            var data = EnrollmentMapper.toData(creditCardCommand());
             given(correlationService.saveIfAbsent(any(), any())).willReturn(true);
             doThrow(new RuntimeException("broker down")).when(checkRequestPublisher).dispatch(any(), any());
 
-            assertThatThrownBy(() -> buildService().processEnrollment(NOW, command))
+            assertThatThrownBy(() -> buildService().processEnrollment(NOW, data))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessage("broker down");
 

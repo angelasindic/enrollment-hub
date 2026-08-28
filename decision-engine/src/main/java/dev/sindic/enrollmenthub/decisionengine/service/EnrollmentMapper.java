@@ -1,26 +1,27 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
-import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.Address;
+import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
-import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 
 /**
- * Two-way mapper between the {@code contracts} event payload and the
- * decision-engine {@link EnrollmentCommand} domain record. Used on both ends
- * of the intake hop:
- * <ul>
- *   <li>{@link #toData(EnrollmentCommand)} — outbound, for the publish path.</li>
- *   <li>{@link #toCommand(EnrollmentEvent)} — inbound, for the intake listener.</li>
- * </ul>
+ * Domain → contracts translation for the intake publish path, plus the one enum bridge the
+ * consume path needs.
+ *
+ * <p>There is no inbound aggregate mapper. The intake message is the decision-engine's own
+ * (ADR-13 §Ingress Inversion): it publishes {@code EnrollmentEvent} and consumes it again, so the
+ * payload arrives in the vocabulary it left in. Rebuilding {@link EnrollmentCommand} from it would
+ * protect against nothing, because no domain logic runs on it — the consume path reads only
+ * {@code paymentType}, and only to pick the applicable signals. The contracts boundary that does
+ * need a translation is the signal results, which become {@code SignalState} (ADR-06, ADR-14).
  */
 public final class EnrollmentMapper {
 
     private EnrollmentMapper() {}
 
-    /** Domain command → contracts payload, for outbound publishes. */
+    /** Domain command → contracts payload, for the intake publish path. */
     public static EnrollmentData toData(EnrollmentCommand command) {
         return new EnrollmentData(
                 command.enrollmentId(),
@@ -35,31 +36,17 @@ public final class EnrollmentMapper {
     }
 
     /**
-     * Inbound contracts event → domain command, for the intake listener.
-     * The {@code createdAt} on {@link EnrollmentEvent} is carried separately
-     * by the listener (not part of {@code EnrollmentCommand}).
+     * The only contracts → domain crossing on the consume path, and the reason the domain keeps its
+     * own {@code PaymentType}: {@code SignalConfig} keys every signal's applicable routes on it, so
+     * the enum is the routing table, not a label. Sharing the contract enum would let a producer's
+     * schema change reach route selection directly (ADR-06).
      */
-    public static EnrollmentCommand toCommand(EnrollmentEvent event) {
-        EnrollmentData data = event.enrollmentData();
-        return new EnrollmentCommand(
-                data.enrollmentId(),
-                dev.sindic.enrollmenthub.decisionengine.domain.PaymentType.valueOf(data.paymentType().name()),
-                toDomainPerson(data.person()),
-                toDomainAddress(data.shippingAddress()),
-                toDomainAddress(data.billingAddress()));
+    public static dev.sindic.enrollmenthub.decisionengine.domain.PaymentType toDomainPaymentType(
+            PaymentType paymentType) {
+        return dev.sindic.enrollmenthub.decisionengine.domain.PaymentType.valueOf(paymentType.name());
     }
 
     private static Address toAddress(dev.sindic.enrollmenthub.decisionengine.domain.Address a) {
         return new Address(a.streetLines(), a.postalCode(), a.city(), a.subregion(), a.countryCode());
-    }
-
-    private static dev.sindic.enrollmenthub.decisionengine.domain.Person toDomainPerson(Person p) {
-        return new dev.sindic.enrollmenthub.decisionengine.domain.Person(
-                p.firstName(), p.lastName(), p.emailAddress(), p.phoneNumber());
-    }
-
-    private static dev.sindic.enrollmenthub.decisionengine.domain.Address toDomainAddress(Address a) {
-        return new dev.sindic.enrollmenthub.decisionengine.domain.Address(
-                a.streetLines(), a.postalCode(), a.city(), a.subregion(), a.countryCode());
     }
 }

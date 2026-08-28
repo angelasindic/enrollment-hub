@@ -1,7 +1,6 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
 import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
-import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.IntakeStatus;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
@@ -46,25 +45,26 @@ public class EnrollmentCorrelationService {
      */
     //TODO hardcoded timeout
     @Transactional(timeout = 10)
-    public boolean saveIfAbsent(Instant createdAt, EnrollmentCommand command) {
-        MDC.put("enrollmentId", command.enrollmentId().toString());
+    public boolean saveIfAbsent(Instant createdAt, EnrollmentData enrollmentData) {
+        var enrollmentId = enrollmentData.enrollmentId();
+        MDC.put("enrollmentId", enrollmentId.toString());
         try {
             Instant timeoutAt = createdAt.plus(timeout);
-            EnrollmentData enrollmentData = EnrollmentMapper.toData(command);
+            var paymentType = EnrollmentMapper.toDomainPaymentType(enrollmentData.paymentType());
             String originalRequest;
             String signalsJson;
             try {
                 originalRequest = jsonMapper.writeValueAsString(enrollmentData);
-                signalsJson = jsonMapper.writeValueAsString(SignalConfig.initializeFor(command.paymentType()));
+                signalsJson = jsonMapper.writeValueAsString(SignalConfig.initializeFor(paymentType));
             } catch (JacksonException jackExc) {
-                throw new EnrollmentSerializationException(command.enrollmentId(), jackExc);
+                throw new EnrollmentSerializationException(enrollmentId, jackExc);
             }
 
             // Atomic INSERT ... ON CONFLICT DO NOTHING: 1 row means we inserted;
             // 0 rows means a concurrent redelivery already inserted this enrollmentId.
             boolean inserted = repository.insertIfAbsent(
-                    command.enrollmentId(),
-                    command.paymentType().name(),
+                    enrollmentId,
+                    enrollmentData.paymentType().name(),
                     originalRequest,
                     signalsJson,
                     createdAt,
@@ -72,10 +72,10 @@ public class EnrollmentCorrelationService {
 
             if (inserted) {
                 log.info("Persisted correlation record '{}' paymentType={}",
-                        command.enrollmentId(), command.paymentType());
+                        enrollmentId, enrollmentData.paymentType());
             } else {
                 log.info("Correlation record already exists for enrollmentId={}; idempotent redelivery",
-                        command.enrollmentId());
+                        enrollmentId);
             }
             return inserted;
         } finally {

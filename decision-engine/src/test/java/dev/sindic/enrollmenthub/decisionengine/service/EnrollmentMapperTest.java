@@ -1,6 +1,5 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
-import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentEvent;
 import dev.sindic.enrollmenthub.decisionengine.domain.Address;
 import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
@@ -8,18 +7,22 @@ import dev.sindic.enrollmenthub.decisionengine.domain.Person;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-import static dev.sindic.enrollmenthub.decisionengine.service.EnrollmentMapper.toCommand;
 import static dev.sindic.enrollmenthub.decisionengine.service.EnrollmentMapper.toData;
+import static dev.sindic.enrollmenthub.decisionengine.service.EnrollmentMapper.toDomainPaymentType;
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * The mapper is one-directional: the intake message is the decision-engine's own, so the consume
+ * path reads {@code EnrollmentData} as it arrived and never rebuilds {@link EnrollmentCommand}
+ * (ADR-06). There is therefore no round trip to assert here. Field-order drift between the domain
+ * and contracts records is pinned by {@code RecordCompatibilityTest} instead.
+ */
 class EnrollmentMapperTest {
 
     private static final UUID ENROLLMENT_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
-    private static final Instant CREATED_AT = Instant.parse("2026-05-23T10:00:00Z");
 
     private static final EnrollmentCommand CREDIT_CARD_COMMAND = new EnrollmentCommand(
             ENROLLMENT_ID,
@@ -90,68 +93,27 @@ class EnrollmentMapperTest {
     }
 
     @Nested
-    class ToCommand {
+    class ToDomainPaymentType {
 
         @Test
-        void enrollmentIdIsPreserved() {
-            var command = toCommand(eventFrom(CREDIT_CARD_COMMAND));
-
-            assertThat(command.enrollmentId()).isEqualTo(ENROLLMENT_ID);
+        void everyContractValueHasADomainCounterpart() {
+            // The only contracts → domain crossing left on the consume path. A value added to the
+            // contract enum without a domain counterpart fails here rather than at dispatch time.
+            for (var contractType : dev.sindic.enrollmenthub.contracts.domain.PaymentType.values()) {
+                assertThat(toDomainPaymentType(contractType).name()).isEqualTo(contractType.name());
+            }
         }
 
         @Test
-        void creditCardPaymentTypeIsMapped() {
-            var command = toCommand(eventFrom(CREDIT_CARD_COMMAND));
-
-            assertThat(command.paymentType()).isEqualTo(PaymentType.CREDIT_CARD);
+        void creditCardMapsToTheDomainEnum() {
+            assertThat(toDomainPaymentType(dev.sindic.enrollmenthub.contracts.domain.PaymentType.CREDIT_CARD))
+                    .isEqualTo(PaymentType.CREDIT_CARD);
         }
 
         @Test
-        void invoicePaymentTypeIsMapped() {
-            var invoiceCommand = new EnrollmentCommand(
-                    ENROLLMENT_ID,
-                    PaymentType.INVOICE,
-                    CREDIT_CARD_COMMAND.person(),
-                    CREDIT_CARD_COMMAND.shippingAddress(),
-                    CREDIT_CARD_COMMAND.billingAddress());
-
-            var command = toCommand(eventFrom(invoiceCommand));
-
-            assertThat(command.paymentType()).isEqualTo(PaymentType.INVOICE);
+        void invoiceMapsToTheDomainEnum() {
+            assertThat(toDomainPaymentType(dev.sindic.enrollmenthub.contracts.domain.PaymentType.INVOICE))
+                    .isEqualTo(PaymentType.INVOICE);
         }
-
-        @Test
-        void personFieldsAreMapped() {
-            var person = toCommand(eventFrom(CREDIT_CARD_COMMAND)).person();
-
-            assertThat(person.firstName()).isEqualTo("Ada");
-            assertThat(person.lastName()).isEqualTo("Lovelace");
-            assertThat(person.emailAddress()).isEqualTo("ada@example.com");
-            assertThat(person.phoneNumber()).isEqualTo("+49123");
-        }
-
-        @Test
-        void addressFieldsAreMapped() {
-            var command = toCommand(eventFrom(CREDIT_CARD_COMMAND));
-
-            assertThat(command.shippingAddress().city()).isEqualTo("Berlin");
-            assertThat(command.shippingAddress().countryCode()).isEqualTo("DE");
-            assertThat(command.billingAddress().city()).isEqualTo("Hamburg");
-            assertThat(command.billingAddress().postalCode()).isEqualTo("10116");
-        }
-
-        @Test
-        void roundTripPreservesCommand() {
-            // toCommand(toData(x)) returns a command structurally equal to x.
-            // Confirms the two directions stay symmetric — adding a field on
-            // one side will fail this test if the other side isn't updated.
-            var roundTripped = toCommand(eventFrom(CREDIT_CARD_COMMAND));
-
-            assertThat(roundTripped).isEqualTo(CREDIT_CARD_COMMAND);
-        }
-    }
-
-    private static EnrollmentEvent eventFrom(EnrollmentCommand command) {
-        return new EnrollmentEvent(CREATED_AT, toData(command));
     }
 }

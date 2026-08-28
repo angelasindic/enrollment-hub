@@ -1,5 +1,7 @@
 package dev.sindic.enrollmenthub.decisionengine;
 
+import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
+import dev.sindic.enrollmenthub.decisionengine.api.EnrollmentRequest;
 import dev.sindic.enrollmenthub.contracts.events.DecisionResult;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
 import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
@@ -12,8 +14,10 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Guards against silent drift between decision-engine domain enums and their
- * contracts module counterparts.
+ * Guards against silent drift between the decision-engine domain enums and the enums of the two
+ * channels either side of them: the {@code contracts} module (messaging) and the {@code api}
+ * request records (REST). Each channel declares its own vocabulary (ADR-06 §One channel, one
+ * contract), so nothing but these assertions keeps the three in step.
  */
 class EnumCompatibilityTest {
 
@@ -36,6 +40,23 @@ class EnumCompatibilityTest {
         Set<String> domain    = enumNames(dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult.class);
         Set<String> contracts = enumNames(DecisionResult.class);
         assertThat(domain).isEqualTo(contracts);
+    }
+
+    @Test
+    void domainPaymentTypeEqualsContracts() {
+        Set<String> domain    = enumNames(dev.sindic.enrollmenthub.decisionengine.domain.PaymentType.class);
+        Set<String> contracts = enumNames(PaymentType.class);
+        assertThat(domain).isEqualTo(contracts);
+    }
+
+    @Test
+    void apiPaymentTypeEqualsDomain() {
+        // Closes the chain: api == domain, and domainPaymentTypeEqualsContracts covers the rest.
+        // A value accepted over REST with no domain counterpart fails here, not at valueOf() time
+        // inside EnrollmentController.createDomainRequest.
+        Set<String> api    = enumNames(EnrollmentRequest.PaymentTypeDto.class);
+        Set<String> domain = enumNames(dev.sindic.enrollmenthub.decisionengine.domain.PaymentType.class);
+        assertThat(api).isEqualTo(domain);
     }
 
     private static <E extends Enum<E>> Set<String> enumNames(Class<E> type) {
