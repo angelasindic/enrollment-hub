@@ -65,7 +65,7 @@
 			     instrumentation 2.21.0-alpha). A newer appender calls OTel API methods absent in 1.55.0
 			     (e.g. LogRecordBuilder.setException) -> NoSuchMethodError at startup. Compile scope so app
 			     code can call OpenTelemetryAppender.install(...) (Spring Boot does not auto-install it). -->
-			<version>2.21.0-alpha</version>
+			<version>2.31.1-alpha</version>
 		</dependency>
 	</dependencies>
 
