@@ -31,8 +31,8 @@ class GeoScoreResultListener {
 
     private static SignalState toSignalState(GeoScoreResult event) {
         if (event.riskLevel() == null) {
-            return SignalState.settledWithoutResult(event.noResultReason());
+            return new SignalState.NoResult(event.noResultReason());
         }
-        return SignalState.settled(RiskLevel.valueOf(event.riskLevel().name()));
+        return new SignalState.Scored(RiskLevel.valueOf(event.riskLevel().name()));
     }
 }

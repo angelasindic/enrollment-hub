@@ -5,6 +5,7 @@ import dev.sindic.enrollmenthub.contracts.events.GeoScoreResult;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
+import dev.sindic.enrollmenthub.decisionengine.service.SignalMapJson;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -55,10 +56,8 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                    .isEqualTo(SignalProcessingState.SETTLED);
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel())
-                    .isEqualTo(RiskLevel.HIGH);
+            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE))
+                    .isEqualTo(new SignalState.Scored(RiskLevel.HIGH));
         });
     }
 
@@ -75,8 +74,8 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel())
-                    .isEqualTo(RiskLevel.LOW);
+            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE))
+                    .isEqualTo(new SignalState.Scored(RiskLevel.LOW));
         });
 
         var duplicate = new GeoScoreResult(
@@ -86,8 +85,8 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
 
         await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).riskLevel())
-                    .isEqualTo(RiskLevel.LOW);
+            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE))
+                    .isEqualTo(new SignalState.Scored(RiskLevel.LOW));
         });
     }
 
@@ -124,8 +123,8 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
                 // Seed FRAUD_CHECK as already-settled via the production write path
                 // (ADR-16 §Write path). The incoming GeoScoreResult then completes the row.
                 var seedSignals = new EnumMap<>(entity.getSignals());
-                seedSignals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-                repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(seedSignals));
+                seedSignals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+                repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, seedSignals));
             });
 
             var event = new GeoScoreResult(
@@ -185,9 +184,8 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
             var geoState = entity.getSignals().get(SignalConfig.GEO_SCORE);
-            assertThat(geoState.processingState()).isEqualTo(SignalProcessingState.SETTLED);
-            assertThat(geoState.riskLevel()).isNull();
-            assertThat(geoState.reason()).isEqualTo("geocoding_failed");
+            // Ran, could not score — NoResult, not NotExecuted. ADR-14 keeps these distinct.
+            assertThat(geoState).isEqualTo(new SignalState.NoResult("geocoding_failed"));
         });
     }
 

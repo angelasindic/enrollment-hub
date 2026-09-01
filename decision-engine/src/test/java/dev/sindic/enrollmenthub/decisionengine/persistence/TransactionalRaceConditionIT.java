@@ -5,8 +5,8 @@ import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
+import dev.sindic.enrollmenthub.decisionengine.service.SignalMapJson;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -73,14 +73,14 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         // WHEN: two threads each read, mutate one signal, and write — coordinated
         //       so both reads land before either write. NO SELECT FOR UPDATE.
         runConcurrentReadModifyWrite(enrollmentId, /* useSelectForUpdate */ false,
-                SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW),
-                SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+                SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW),
+                SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
 
         // THEN: only ONE of the two signals is SETTLED. The other was overwritten
         //       by the loser's stale-snapshot UPDATE. This is the lost-update race.
         Map<SignalConfig, SignalState> finalSignals = readSignals(enrollmentId);
         long settledCount = finalSignals.values().stream()
-                .filter(s -> s.processingState() == SignalProcessingState.SETTLED)
+                .filter(SignalState::hasSettled)
                 .count();
 
         assertThat(settledCount)
@@ -102,13 +102,13 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         //       reads the post-update state and computes the new map from
         //       fresh data instead of stale data.
         runConcurrentReadModifyWrite(enrollmentId, /* useSelectForUpdate */ true,
-                SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW),
-                SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+                SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW),
+                SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
 
         // THEN: both signals SETTLED — no lost update.
         Map<SignalConfig, SignalState> finalSignals = readSignals(enrollmentId);
         long settledCount = finalSignals.values().stream()
-                .filter(s -> s.processingState() == SignalProcessingState.SETTLED)
+                .filter(SignalState::hasSettled)
                 .count();
 
         assertThat(settledCount)
@@ -191,9 +191,9 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
 
                 // 3. Compute new signals JSON in application memory based on the
                 //    snapshot we read at step 1.
-                Map<String, SignalState> updated = parseSignals(currentJson);
-                updated.put(signal.name(), newState);
-                String newJson = jsonMapper.writeValueAsString(updated);
+                Map<SignalConfig, SignalState> updated = parseSignals(currentJson);
+                updated.put(signal, newState);
+                String newJson = SignalMapJson.write(jsonMapper, updated);
 
                 // 4. UPDATE — acquires the row-level write lock at this moment.
                 //    Without step 1's FOR UPDATE, this lock arrives too late: the
@@ -208,8 +208,8 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         }
     }
 
-    private Map<String, SignalState> parseSignals(String json) {
-        return jsonMapper.readValue(json, new TypeReference<HashMap<String, SignalState>>() {});
+    private Map<SignalConfig, SignalState> parseSignals(String json) {
+        return jsonMapper.readValue(json, new TypeReference<HashMap<SignalConfig, SignalState>>() {});
     }
 
     private Map<SignalConfig, SignalState> readSignals(UUID enrollmentId) {

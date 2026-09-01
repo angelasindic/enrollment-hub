@@ -6,6 +6,7 @@ import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
+import dev.sindic.enrollmenthub.decisionengine.service.SignalMapJson;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Binding;
@@ -47,10 +48,8 @@ class FraudCheckResultListenerIT extends BaseIntegrationTest {
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
-            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.SETTLED);
-            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).outcome())
-                    .isEqualTo(SignalOutcome.OK);
+            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK))
+                    .isEqualTo(new SignalState.Checked(SignalOutcome.OK));
         });
     }
 
@@ -84,8 +83,8 @@ class FraudCheckResultListenerIT extends BaseIntegrationTest {
                         TestEntityFactory.creditCard(enrollmentId, Instant.now(), Instant.now().plusSeconds(60)));
                 // Seed GEO_SCORE as already-settled; the incoming FraudCheckResult then completes the row.
                 var seedSignals = new EnumMap<>(entity.getSignals());
-                seedSignals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-                repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(seedSignals));
+                seedSignals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
+                repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, seedSignals));
             });
 
             rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.FRAUD_CHECK_KEY,

@@ -7,7 +7,6 @@ import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -86,10 +85,11 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
         var entity = repository.findById(id).orElseThrow();
         assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.APPROVED);
         assertThat(entity.getDecidedAt()).isNotNull();
-        assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                .isEqualTo(SignalProcessingState.FAILED);
-        assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                .isEqualTo(SignalProcessingState.FAILED);
+        // Neither service replied before the deadline: never ran, so NotExecuted with the reason.
+        assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE))
+                .isEqualTo(new SignalState.NotExecuted("timeout"));
+        assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK))
+                .isEqualTo(new SignalState.NotExecuted("timeout"));
 
         var decision = awaitDecisionFor(capture, entity.getDecisionId()).event();
         assertThat(decision.decisionResult())
@@ -104,7 +104,7 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
         repository.saveAndFlush(TestEntityFactory.creditCard(id,
                 Instant.now().minusSeconds(120), Instant.now().minusSeconds(60)));
         // Settle GEO_SCORE = HIGH via the production write path; leave FRAUD_CHECK pending.
-        enrollmentService.recordSignalResult(id, SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
+        enrollmentService.recordSignalResult(id, SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.HIGH));
 
         enrollmentService.processExpiredTimeouts(Instant.now(), 100);
 
@@ -112,10 +112,9 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
         // A settled HIGH scoring signal flags review; the timed-out fraud check fails open.
         assertThat(entity.getDecisionResult()).isEqualTo(DecisionResult.CONDITIONAL_APPROVED);
         var geo = entity.getSignals().get(SignalConfig.GEO_SCORE);
-        assertThat(geo.processingState()).isEqualTo(SignalProcessingState.SETTLED);
-        assertThat(geo.riskLevel()).isEqualTo(RiskLevel.HIGH);
-        assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                .isEqualTo(SignalProcessingState.FAILED);
+        assertThat(geo).isEqualTo(new SignalState.Scored(RiskLevel.HIGH));
+        assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK))
+                .isEqualTo(new SignalState.NotExecuted("timeout"));
 
         var decision = awaitDecisionFor(capture, entity.getDecisionId()).event();
         assertThat(decision.decisionResult())
@@ -133,8 +132,7 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
         var entity = repository.findById(id).orElseThrow();
         assertThat(entity.getDecisionResult()).isNull();
         assertThat(entity.getDecidedAt()).isNull();
-        assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                .isEqualTo(SignalProcessingState.PENDING);
+        assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE)).isInstanceOf(SignalState.Pending.class);
     }
 
     // ── Dispatch phase (ADR-17) ────────────────────────────────────────────────
@@ -233,10 +231,10 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
             repository.saveAndFlush(TestEntityFactory.creditCard(
                     enrollmentId, Instant.now(), Instant.now().plusSeconds(300)));
             var settled = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
-            settled.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            settled.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            settled.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
+            settled.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
             repository.completeWithDecision(enrollmentId,
-                    jsonMapper.writeValueAsString(settled), "APPROVED", decisionId, decidedAt);
+                    SignalMapJson.write(jsonMapper, settled), "APPROVED", decisionId, decidedAt);
         });
     }
 

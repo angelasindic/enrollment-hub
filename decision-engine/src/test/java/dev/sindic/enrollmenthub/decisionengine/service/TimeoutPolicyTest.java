@@ -7,7 +7,6 @@ import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import org.junit.jupiter.api.Test;
 
@@ -37,10 +36,10 @@ class TimeoutPolicyTest {
     void creditCard_allPending_bothFailOpen() {
         var timedOut = EnrollmentService.applyTimeoutPolicy(pendingFor(PaymentType.CREDIT_CARD));
 
-        assertThat(timedOut.get(SignalConfig.GEO_SCORE).processingState())
-                .isEqualTo(SignalProcessingState.FAILED);
-        assertThat(timedOut.get(SignalConfig.FRAUD_CHECK).processingState())
-                .isEqualTo(SignalProcessingState.FAILED);
+        assertThat(timedOut.get(SignalConfig.GEO_SCORE))
+                .isEqualTo(new SignalState.NotExecuted("timeout"));
+        assertThat(timedOut.get(SignalConfig.FRAUD_CHECK))
+                .isEqualTo(new SignalState.NotExecuted("timeout"));
         assertThat(SignalConfig.allSettled(timedOut)).isTrue();
     }
 
@@ -49,23 +48,22 @@ class TimeoutPolicyTest {
         var timedOut = EnrollmentService.applyTimeoutPolicy(pendingFor(PaymentType.INVOICE));
 
         assertThat(timedOut).containsOnlyKeys(SignalConfig.FRAUD_CHECK);
-        assertThat(timedOut.get(SignalConfig.FRAUD_CHECK).processingState())
-                .isEqualTo(SignalProcessingState.FAILED);
+        assertThat(timedOut.get(SignalConfig.FRAUD_CHECK))
+                .isEqualTo(new SignalState.NotExecuted("timeout"));
         assertThat(SignalConfig.allSettled(timedOut)).isTrue();
     }
 
     @Test
     void alreadySettledSignal_isLeftUntouched() {
         var signals = pendingFor(PaymentType.CREDIT_CARD);
-        signals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
+        signals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.HIGH));
 
         var timedOut = EnrollmentService.applyTimeoutPolicy(signals);
 
-        assertThat(timedOut.get(SignalConfig.GEO_SCORE).processingState())
-                .isEqualTo(SignalProcessingState.SETTLED);
-        assertThat(timedOut.get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.HIGH);
-        assertThat(timedOut.get(SignalConfig.FRAUD_CHECK).processingState())
-                .isEqualTo(SignalProcessingState.FAILED);
+        assertThat(timedOut.get(SignalConfig.GEO_SCORE))
+                .isEqualTo(new SignalState.Scored(RiskLevel.HIGH));
+        assertThat(timedOut.get(SignalConfig.FRAUD_CHECK))
+                .isEqualTo(new SignalState.NotExecuted("timeout"));
     }
 
     @Test
@@ -79,8 +77,8 @@ class TimeoutPolicyTest {
     }
 
     /**
-     * Fail-closed branch: a still-PENDING {@code REQUIRED} signal settles with
-     * {@link SignalOutcome#FAILED} rather than merely failing, which drives
+     * Fail-closed branch: a still-{@code Pending} {@code REQUIRED} signal settles as
+     * {@code Checked(FAILED)} rather than {@code NotExecuted}, which drives
      * {@link DecisionResult#REJECTED}. Skipped as unreachable — and the test
      * self-disables — until a {@code REQUIRED} signal is declared.
      */
@@ -93,12 +91,11 @@ class TimeoutPolicyTest {
                 "no REQUIRED SignalConfig declared yet");
 
         var signals = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
-        signals.put(required.get(), SignalState.pending());
+        signals.put(required.get(), new SignalState.Pending());
 
         var timedOut = EnrollmentService.applyTimeoutPolicy(signals);
 
-        assertThat(timedOut.get(required.get()).processingState())
-                .isEqualTo(SignalProcessingState.SETTLED);
-        assertThat(timedOut.get(required.get()).outcome()).isEqualTo(SignalOutcome.FAILED);
+        assertThat(timedOut.get(required.get()))
+                .isEqualTo(new SignalState.Checked(SignalOutcome.FAILED));
     }
 }

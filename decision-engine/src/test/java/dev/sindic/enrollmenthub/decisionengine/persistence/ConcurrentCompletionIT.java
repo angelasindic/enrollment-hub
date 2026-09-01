@@ -3,6 +3,7 @@ package dev.sindic.enrollmenthub.decisionengine.persistence;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
+import dev.sindic.enrollmenthub.decisionengine.service.SignalMapJson;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -53,8 +54,8 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
                     var entity = repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
                     sleep(200);
                     var updated = new EnumMap<>(entity.getSignals());
-                    updated.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
-                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated));
+                    updated.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.HIGH));
+                    repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, updated));
                     geoSawComplete.set(SignalConfig.allSettled(updated));
                 });
             } catch (Throwable t) {
@@ -69,8 +70,8 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
                     var entity = repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
                     sleep(200);
                     var updated = new EnumMap<>(entity.getSignals());
-                    updated.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-                    repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updated));
+                    updated.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+                    repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, updated));
                     fraudSawComplete.set(SignalConfig.allSettled(updated));
                 });
             } catch (Throwable t) {
@@ -85,12 +86,10 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
         assertThat(fraudError.get()).isNull();
 
         var final_ = txTemplate.execute(status -> repository.findById(enrollmentId).orElseThrow());
-        assertThat(final_.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                .isEqualTo(SignalProcessingState.SETTLED);
-        assertThat(final_.getSignals().get(SignalConfig.GEO_SCORE).riskLevel()).isEqualTo(RiskLevel.HIGH);
-        assertThat(final_.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                .isEqualTo(SignalProcessingState.SETTLED);
-        assertThat(final_.getSignals().get(SignalConfig.FRAUD_CHECK).outcome()).isEqualTo(SignalOutcome.OK);
+        assertThat(final_.getSignals().get(SignalConfig.GEO_SCORE))
+                .isEqualTo(new SignalState.Scored(RiskLevel.HIGH));
+        assertThat(final_.getSignals().get(SignalConfig.FRAUD_CHECK))
+                .isEqualTo(new SignalState.Checked(SignalOutcome.OK));
         assertThat(SignalConfig.allSettled(final_.getSignals())).isTrue();
 
         assertThat(geoSawComplete.get() ^ fraudSawComplete.get())

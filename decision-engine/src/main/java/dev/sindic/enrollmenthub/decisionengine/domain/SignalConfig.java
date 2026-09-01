@@ -52,12 +52,12 @@ public enum SignalConfig {
         return classification;
     }
 
-    /** The initial all-PENDING signal map for the given route. */
+    /** The initial signal map for the given route — every applicable signal {@code Pending}. */
     public static Map<SignalConfig, SignalState> initializeFor(PaymentType paymentType) {
         var signals = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
         for (var sc : values()) {
             if (sc.applicableTo(paymentType)) {
-                signals.put(sc, SignalState.pending());
+                signals.put(sc, new SignalState.Pending());
             }
         }
         return signals;

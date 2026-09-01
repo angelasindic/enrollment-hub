@@ -8,7 +8,6 @@ import dev.sindic.enrollmenthub.contracts.events.EnrollmentSignal;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
 import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
 import tools.jackson.databind.json.JsonMapper;
@@ -63,13 +62,27 @@ final class DecisionEventMapper {
                 data.paymentType(), data.person(), data.shippingAddress(), data.billingAddress());
     }
 
+    /**
+     * Flattens a {@link SignalState} onto the published three-field {@link EnrollmentSignal}.
+     *
+     * <p>Exhaustive by design — a sixth variant stops this compiling. {@code NotExecuted} still
+     * publishes as {@link SignalOutcome#FAILED} because the contract has no value for "never ran"
+     * yet; that is the C1 defect, kept here deliberately so this commit stays behaviour-preserving
+     * and the fix lands as a diff of its own (ADR-14 §Costs).
+     */
     private static EnrollmentSignal toContractSignal(SignalState state) {
-        if (state.processingState() == SignalProcessingState.FAILED) {
-            return new EnrollmentSignal(SignalOutcome.FAILED, mapRiskLevel(state.riskLevel()), state.reason());
-        }
-        SignalOutcome outcome = state.outcome() != null ? SignalOutcome.valueOf(state.outcome().name()) : null;
-        RiskLevel riskLevel = mapRiskLevel(state.riskLevel());
-        return new EnrollmentSignal(outcome, riskLevel, state.reason());
+        return switch (state) {
+            case SignalState.Pending ignored -> throw new IllegalStateException(
+                    "PENDING signal reached the decision event mapper");
+            case SignalState.Checked(var outcome) ->
+                    new EnrollmentSignal(SignalOutcome.valueOf(outcome.name()), null, null);
+            case SignalState.Scored(var riskLevel) ->
+                    new EnrollmentSignal(null, mapRiskLevel(riskLevel), null);
+            case SignalState.NoResult(var reason) ->
+                    new EnrollmentSignal(null, null, reason);
+            case SignalState.NotExecuted(var reason) ->
+                    new EnrollmentSignal(SignalOutcome.FAILED, null, reason);
+        };
     }
 
     private static RiskLevel mapRiskLevel(dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel riskLevel) {

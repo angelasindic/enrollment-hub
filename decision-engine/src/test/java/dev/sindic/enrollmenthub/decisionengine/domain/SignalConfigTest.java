@@ -17,14 +17,12 @@ class SignalConfigTest {
 
         @Test
         void geoScoreIsPending() {
-            assertThat(signals.get(SignalConfig.GEO_SCORE).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
+            assertThat(signals.get(SignalConfig.GEO_SCORE)).isInstanceOf(SignalState.Pending.class);
         }
 
         @Test
         void fraudCheckIsPending() {
-            assertThat(signals.get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
+            assertThat(signals.get(SignalConfig.FRAUD_CHECK)).isInstanceOf(SignalState.Pending.class);
         }
 
         @Test
@@ -41,8 +39,7 @@ class SignalConfigTest {
 
         @Test
         void fraudCheckIsPending() {
-            assertThat(signals.get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
+            assertThat(signals.get(SignalConfig.FRAUD_CHECK)).isInstanceOf(SignalState.Pending.class);
         }
 
         @Test
@@ -74,30 +71,30 @@ class SignalConfigTest {
         @Test
         void trueWhenAllSignalsAreSettled() {
             var signals = SignalConfig.initializeFor(PaymentType.CREDIT_CARD);
-            signals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            signals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            signals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
+            signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
             assertThat(SignalConfig.allSettled(signals)).isTrue();
         }
 
         @Test
         void failedCountsAsTerminal() {
             var signals = SignalConfig.initializeFor(PaymentType.CREDIT_CARD);
-            signals.put(SignalConfig.GEO_SCORE, SignalState.failed());
-            signals.put(SignalConfig.FRAUD_CHECK, SignalState.failed());
+            signals.put(SignalConfig.GEO_SCORE, new SignalState.NotExecuted("timeout"));
+            signals.put(SignalConfig.FRAUD_CHECK, new SignalState.NotExecuted("timeout"));
             assertThat(SignalConfig.allSettled(signals)).isTrue();
         }
 
         @Test
         void invoiceCompleteWhenFraudSettles() {
             var signals = SignalConfig.initializeFor(PaymentType.INVOICE);
-            signals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
             assertThat(SignalConfig.allSettled(signals)).isTrue();
         }
 
         @Test
         void partialSettlementIsNotComplete() {
             var signals = SignalConfig.initializeFor(PaymentType.CREDIT_CARD);
-            signals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+            signals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
             // FRAUD_CHECK still PENDING
             assertThat(SignalConfig.allSettled(signals)).isFalse();
         }

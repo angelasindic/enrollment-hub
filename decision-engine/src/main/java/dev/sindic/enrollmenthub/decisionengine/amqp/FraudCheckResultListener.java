@@ -24,9 +24,16 @@ class FraudCheckResultListener {
         try {
             log.info("Received fraudCheckResult outcome={}", event.outcome());
             service.recordSignalResult(event.enrollmentId(), SignalConfig.FRAUD_CHECK,
-                    SignalState.settled(SignalOutcome.valueOf(event.outcome().name())));
+                    toSignalState(event));
         } finally {
             MDC.remove("enrollmentId");
         }
+    }
+
+    private static SignalState toSignalState(FraudCheckResult event) {
+        return switch (event.outcome()) {
+            case OK, FAILED -> new SignalState.Checked(SignalOutcome.valueOf(event.outcome().name()));
+            case NO_RESULT  -> new SignalState.NoResult("fraud_check_no_result");
+        };
     }
 }
