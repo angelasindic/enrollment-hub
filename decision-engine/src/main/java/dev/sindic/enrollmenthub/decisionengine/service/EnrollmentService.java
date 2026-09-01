@@ -5,7 +5,6 @@ import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.GateClassification;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
@@ -50,6 +49,9 @@ import java.util.UUID;
 @Slf4j
 public class EnrollmentService {
 
+    /** Recorded on every signal the timeout poller settles, so the row says why it is missing. */
+    static final String TIMEOUT_REASON = "timeout";
+
     private final EnrollmentRepository repository;
     private final DecisionDispatcher dispatcher;
     private final JsonMapper jsonMapper;
@@ -78,7 +80,7 @@ public class EnrollmentService {
 
         // Idempotency guard — duplicate delivery or late arrival after timeout.
         var currentSignal = entity.getSignals().get(signal);
-        if (currentSignal == null || currentSignal.processingState() != SignalProcessingState.PENDING) {
+        if (!(currentSignal instanceof  SignalState.Pending)) {
             log.warn("{} already recorded — idempotent discard", signal);
             return;
         }
@@ -95,7 +97,7 @@ public class EnrollmentService {
             return;
         }
 
-        int rows = repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(updatedSignals));
+        int rows = repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, updatedSignals));
         if (rows != 1) {
             throw new IllegalStateException(
                     "updateSignals affected " + rows + " rows for enrollmentId=" + enrollmentId);
@@ -142,7 +144,7 @@ public class EnrollmentService {
         var decidedAt = clock.instant();
 
         int rows = repository.completeWithDecision(enrollmentId,
-                jsonMapper.writeValueAsString(settledSignals),
+                SignalMapJson.write(jsonMapper, settledSignals),
                 decision.decision().name(), decisionId, decidedAt);
         if (rows != 1) {
             // The decision_result IS NULL guard rejected — another path already completed this
@@ -181,23 +183,32 @@ public class EnrollmentService {
      * signals are unchanged.
      * <ul>
      *   <li>{@code BEST_EFFORT} / {@code SCORING_SIGNAL} — <b>fail open</b>: becomes
-     *       {@link SignalState#failed()}, contributing nothing to aggregation. Degraded
-     *       availability of a non-critical check does not block enrollment.</li>
-     *   <li>{@code REQUIRED} — <b>fail closed</b>: settles with {@link SignalOutcome#FAILED},
-     *       which drives {@link DecisionResult#REJECTED}. An unverifiable required check
-     *       rejects rather than approves.</li>
+     *       {@link SignalState.NotExecuted}, contributing nothing to aggregation. Degraded
+     *       availability of a non-critical check does not block enrollment. Distinct from
+     *       {@link SignalState.NoResult}, which means the service ran and could not produce a
+     *       value — a distinction ADR-14 requires the model to keep.</li>
+     *   <li>{@code REQUIRED} — <b>fail closed</b>: settles as {@link SignalState.Checked} with
+     *       {@link SignalOutcome#FAILED}, which drives {@link DecisionResult#REJECTED}. An
+     *       unverifiable required check rejects rather than approves.</li>
      * </ul>
      */
     static Map<SignalConfig, SignalState> applyTimeoutPolicy(Map<SignalConfig, SignalState> signals) {
-        var timedOut = new EnumMap<>(signals);
-        timedOut.replaceAll((signal, state) -> {
-            if (state.processingState() != SignalProcessingState.PENDING) {
-                return state;
-            }
-            return signal.classification() == GateClassification.REQUIRED
-                    ? SignalState.settled(SignalOutcome.FAILED)
-                    : SignalState.failed();
-        });
-        return timedOut;
+        var result = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
+        signals.forEach((signal, state) -> result.put(signal, onTimeout(signal, state)));
+        return result;
+    }
+
+    private static SignalState onTimeout(SignalConfig signal, SignalState state) {
+
+        return switch (state) {
+            case SignalState.Pending _ -> switch (signal.classification()) {
+                case REQUIRED ->  new SignalState.Checked(SignalOutcome.FAILED);
+                case BEST_EFFORT, SCORING_SIGNAL -> new SignalState.NotExecuted("timeout");
+            };
+            case SignalState.Checked _,
+                 SignalState.NotExecuted _,
+                 SignalState.NoResult _,
+                 SignalState.Scored _-> state;
+        };
     }
 }

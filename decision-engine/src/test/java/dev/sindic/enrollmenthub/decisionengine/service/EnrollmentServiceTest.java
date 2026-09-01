@@ -4,7 +4,6 @@ import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalProcessingState;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
@@ -81,18 +80,16 @@ class EnrollmentServiceTest {
 
         // WHEN geo settles HIGH (fraud is still PENDING — not yet complete).
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.HIGH));
+                new SignalState.Scored(RiskLevel.HIGH));
 
         // THEN the new signals JSON went to the explicit UPDATE; no decision, no dispatch hook.
         var jsonCaptor = ArgumentCaptor.forClass(String.class);
         then(repository).should().updateSignals(eq(enrollmentId), jsonCaptor.capture());
         assertThat(jsonCaptor.getValue())
-                .as("explicit UPDATE carries the post-transition signal map")
-                .contains("\"GEO_SCORE\"")
-                .contains("\"SETTLED\"")
-                .contains("\"HIGH\"")
-                .contains("\"FRAUD_CHECK\"")
-                .contains("\"PENDING\"");
+                .as("explicit UPDATE carries the post-transition signal map, discriminator included — "
+                        + "an untyped write drops \"kind\" and the row cannot be read back")
+                .isEqualTo("{\"GEO_SCORE\":{\"kind\":\"SCORED\",\"riskLevel\":\"HIGH\"},"
+                        + "\"FRAUD_CHECK\":{\"kind\":\"PENDING\"}}");
         then(repository).should(never()).completeWithDecision(any(), any(), any(), any(), any());
         simulateCommit();
         then(dispatcher).should(never()).dispatchNow(any());
@@ -103,13 +100,13 @@ class EnrollmentServiceTest {
         // GIVEN a CREDIT_CARD entity with FRAUD already settled OK.
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
-        entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
         given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(1);
 
         // WHEN geo settles LOW — both signals now settled, decision fires.
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.LOW));
+                new SignalState.Scored(RiskLevel.LOW));
 
         // THEN a single combined UPDATE writes signals + decision; no separate updateSignals.
         then(repository).should(never()).updateSignals(any(), any());
@@ -125,9 +122,9 @@ class EnrollmentServiceTest {
                 decisionIdCaptor.capture(),
                 decidedAtCaptor.capture());
         assertThat(signalsJsonCaptor.getValue())
-                .as("combined UPDATE carries the post-transition signal map")
-                .contains("\"GEO_SCORE\"").contains("\"SETTLED\"").contains("\"LOW\"")
-                .contains("\"FRAUD_CHECK\"").contains("\"OK\"");
+                .as("combined UPDATE carries the post-transition signal map, discriminator included")
+                .isEqualTo("{\"GEO_SCORE\":{\"kind\":\"SCORED\",\"riskLevel\":\"LOW\"},"
+                        + "\"FRAUD_CHECK\":{\"kind\":\"CHECKED\",\"outcome\":\"OK\"}}");
         assertThat(decisionResultCaptor.getValue()).isEqualTo(DecisionResult.APPROVED.name());
         assertThat(decisionIdCaptor.getValue()).isNotNull();
         assertThat(decidedAtCaptor.getValue()).isEqualTo(FIXED_CLOCK.instant());
@@ -143,11 +140,11 @@ class EnrollmentServiceTest {
     void recordSignalResult_idempotentDiscard_whenSignalAlreadySettled() {
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
-        entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+        entity.getSignals().put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
 
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.HIGH));
+                new SignalState.Scored(RiskLevel.HIGH));
 
         // No write, no decision, no dispatch — silent idempotent return.
         then(repository).should(never()).updateSignals(any(), any());
@@ -162,7 +159,7 @@ class EnrollmentServiceTest {
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.LOW)))
+                new SignalState.Scored(RiskLevel.LOW)))
                 .isInstanceOf(UnknownCorrelationException.class)
                 .hasMessageContaining(enrollmentId.toString());
 
@@ -182,7 +179,7 @@ class EnrollmentServiceTest {
         given(repository.updateSignals(eq(enrollmentId), anyString())).willReturn(0);
 
         assertThatThrownBy(() -> service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.LOW)))
+                new SignalState.Scored(RiskLevel.LOW)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(enrollmentId.toString())
                 .hasMessageContaining("0");
@@ -199,12 +196,12 @@ class EnrollmentServiceTest {
         // but if it does happen we must not register a second dispatch.
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
-        entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
         given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(0);
 
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.LOW));
+                new SignalState.Scored(RiskLevel.LOW));
 
         simulateCommit();
         then(dispatcher).should(never()).dispatchNow(any());
@@ -217,13 +214,13 @@ class EnrollmentServiceTest {
         // decided correctly. Re-delivery is the relay's job (ADR-17).
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
-        entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
         given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(1);
         doThrow(new RuntimeException("broker down")).when(dispatcher).dispatchNow(enrollmentId);
 
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.LOW));
+                new SignalState.Scored(RiskLevel.LOW));
 
         assertThatCode(EnrollmentServiceTest::simulateCommit).doesNotThrowAnyException();
         then(dispatcher).should().dispatchNow(enrollmentId);
@@ -236,11 +233,11 @@ class EnrollmentServiceTest {
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
         entity.getSignals().put(SignalConfig.GEO_SCORE,
-                new SignalState(SignalProcessingState.FAILED, null, null, "timeout"));
+                new SignalState.NotExecuted("timeout"));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
 
         service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
-                SignalState.settled(RiskLevel.LOW));
+                new SignalState.Scored(RiskLevel.LOW));
 
         then(repository).should(never()).updateSignals(any(), any());
         simulateCommit();

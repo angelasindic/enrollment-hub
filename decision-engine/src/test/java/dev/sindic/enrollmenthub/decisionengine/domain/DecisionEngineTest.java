@@ -29,25 +29,25 @@ class DecisionEngineTest {
 
     /** Credit card with both signals settled. */
     private static Map<SignalConfig, SignalState> creditCard(SignalOutcome fraud, RiskLevel geo) {
-        return signals(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud),
-                       SignalConfig.GEO_SCORE,   SignalState.settled(geo));
+        return signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(fraud),
+                       SignalConfig.GEO_SCORE,   new SignalState.Scored(geo));
     }
 
     /** Credit card with fraud settled, geo timed out (FAILED). */
     private static Map<SignalConfig, SignalState> creditCardGeoFailed(SignalOutcome fraud) {
-        return signals(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud),
-                       SignalConfig.GEO_SCORE,   SignalState.failed());
+        return signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(fraud),
+                       SignalConfig.GEO_SCORE,   new SignalState.NotExecuted("timeout"));
     }
 
     /** Credit card with geo settled, fraud timed out (FAILED). */
     private static Map<SignalConfig, SignalState> creditCardFraudFailed(RiskLevel geo) {
-        return signals(SignalConfig.GEO_SCORE,   SignalState.settled(geo),
-                       SignalConfig.FRAUD_CHECK, SignalState.failed());
+        return signals(SignalConfig.GEO_SCORE,   new SignalState.Scored(geo),
+                       SignalConfig.FRAUD_CHECK, new SignalState.NotExecuted("timeout"));
     }
 
     /** Invoice with fraud settled. */
     private static Map<SignalConfig, SignalState> invoice(SignalOutcome fraud) {
-        return signals(SignalConfig.FRAUD_CHECK, SignalState.settled(fraud));
+        return signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(fraud));
     }
 
     private static EnrollmentDecisionResult evaluate(Map<SignalConfig, SignalState> signals) {
@@ -76,8 +76,8 @@ class DecisionEngineTest {
     void evaluate_partiallySettledMap_namesTheOffendingSignal() {
         // One signal settled, one still PENDING — the guard must identify which.
         var enrollmentId = UUID.randomUUID();
-        var partial = signals(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK),
-                              SignalConfig.GEO_SCORE,   SignalState.pending());
+        var partial = signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK),
+                              SignalConfig.GEO_SCORE,   new SignalState.Pending());
 
         assertThatThrownBy(() -> DecisionEngine.evaluate(partial, enrollmentId))
                 .isInstanceOf(AggregationPreconditionException.class)
@@ -135,14 +135,19 @@ class DecisionEngineTest {
 
         @Test
         void fraudNoResult_geoLow_approved() {
-            // NO_RESULT = ran but could not score — fail-open for BEST_EFFORT
-            assertThat(evaluate(creditCard(SignalOutcome.NO_RESULT, RiskLevel.LOW)).decision())
+            // NoResult = ran but could not reach a verdict — fail-open for BEST_EFFORT.
+            // Distinct from NotExecuted, which is the signal never running at all.
+            assertThat(evaluate(signals(
+                    SignalConfig.FRAUD_CHECK, new SignalState.NoResult("fraud_check_no_result"),
+                    SignalConfig.GEO_SCORE,   new SignalState.Scored(RiskLevel.LOW))).decision())
                     .isEqualTo(APPROVED);
         }
 
         @Test
         void fraudNoResult_geoHigh_conditionalApproved() {
-            assertThat(evaluate(creditCard(SignalOutcome.NO_RESULT, RiskLevel.HIGH)).decision())
+            assertThat(evaluate(signals(
+                    SignalConfig.FRAUD_CHECK, new SignalState.NoResult("fraud_check_no_result"),
+                    SignalConfig.GEO_SCORE,   new SignalState.Scored(RiskLevel.HIGH))).decision())
                     .isEqualTo(CONDITIONAL_APPROVED);
         }
 
@@ -154,15 +159,17 @@ class DecisionEngineTest {
 
         @Test
         void geoTimedOut_fraudNoResult_approved() {
-            assertThat(evaluate(creditCardGeoFailed(SignalOutcome.NO_RESULT)).decision())
+            assertThat(evaluate(signals(
+                    SignalConfig.FRAUD_CHECK, new SignalState.NoResult("fraud_check_no_result"),
+                    SignalConfig.GEO_SCORE,   new SignalState.NotExecuted("timeout"))).decision())
                     .isEqualTo(APPROVED);
         }
 
         @Test
         void geoTimedOut_fraudFailed_rejected() {
             // Fraud FAILED outcome is explicit — REJECTED even though geo timed out
-            var settled = signals(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.FAILED),
-                                  SignalConfig.GEO_SCORE,   SignalState.failed());
+            var settled = signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.FAILED),
+                                  SignalConfig.GEO_SCORE,   new SignalState.NotExecuted("timeout"));
             assertThat(evaluate(settled).decision()).isEqualTo(REJECTED);
         }
 
@@ -192,16 +199,16 @@ class DecisionEngineTest {
 
         @Test
         void bothTimedOut_approved() {
-            var timedOut = signals(SignalConfig.FRAUD_CHECK, SignalState.failed(),
-                                   SignalConfig.GEO_SCORE,   SignalState.failed());
+            var timedOut = signals(SignalConfig.FRAUD_CHECK, new SignalState.NotExecuted("timeout"),
+                                   SignalConfig.GEO_SCORE,   new SignalState.NotExecuted("timeout"));
             assertThat(evaluate(timedOut).decision()).isEqualTo(APPROVED);
         }
 
         @Test
         void geoSettledWithoutResult_fraudOk_approved() {
             // Geocoding failure → settled without score → fail-open
-            var settled = signals(SignalConfig.GEO_SCORE,   SignalState.settledWithoutResult("geocoding_failed"),
-                                  SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            var settled = signals(SignalConfig.GEO_SCORE,   new SignalState.NoResult("geocoding_failed"),
+                                  SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
             assertThat(evaluate(settled).decision()).isEqualTo(APPROVED);
         }
     }
@@ -223,12 +230,13 @@ class DecisionEngineTest {
 
         @Test
         void fraudNoResult_approved() {
-            assertThat(evaluate(invoice(SignalOutcome.NO_RESULT)).decision()).isEqualTo(APPROVED);
+            assertThat(evaluate(signals(SignalConfig.FRAUD_CHECK, new SignalState.NoResult("fraud_check_no_result"))).decision())
+                    .isEqualTo(APPROVED);
         }
 
         @Test
         void fraudTimedOut_approved() {
-            assertThat(evaluate(signals(SignalConfig.FRAUD_CHECK, SignalState.failed())).decision())
+            assertThat(evaluate(signals(SignalConfig.FRAUD_CHECK, new SignalState.NotExecuted("timeout"))).decision())
                     .isEqualTo(APPROVED);
         }
     }
@@ -239,7 +247,7 @@ class DecisionEngineTest {
      * ADR-14 compliance — asymmetric aggregation property.
      *
      * <p>For every {@link RiskLevel}, with {@link SignalOutcome#OK} from the fraud check
-     * and both signals {@link SignalProcessingState#SETTLED}, the result is
+     * and both signals settled with a result, the result is
      * {@code APPROVED} or {@code CONDITIONAL_APPROVED} — never {@code REJECTED}.
      * Proves that a {@link GateClassification#SCORING_SIGNAL} cannot drive rejection
      * regardless of its risk level, even when the authoritative check actively passes.

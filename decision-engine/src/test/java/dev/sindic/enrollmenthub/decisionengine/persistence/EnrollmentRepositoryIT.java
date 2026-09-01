@@ -3,6 +3,8 @@ package dev.sindic.enrollmenthub.decisionengine.persistence;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.domain.*;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
+import dev.sindic.enrollmenthub.decisionengine.service.SignalMapJson;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -28,6 +30,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
     @Autowired private EnrollmentRepository repository;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private JsonMapper jsonMapper;
+    @Autowired private EntityManager entityManager;
 
     @Nested
     class RoundTrip {
@@ -44,10 +47,8 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             assertThat(loaded.getEnrollmentId()).isEqualTo(enrollmentId);
             assertThat(loaded.getPaymentType()).isEqualTo(PaymentType.CREDIT_CARD);
             assertThat(loaded.getSignals()).containsOnlyKeys(SignalConfig.GEO_SCORE, SignalConfig.FRAUD_CHECK);
-            assertThat(loaded.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
-            assertThat(loaded.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
+            assertThat(loaded.getSignals().get(SignalConfig.GEO_SCORE)).isInstanceOf(SignalState.Pending.class);
+            assertThat(loaded.getSignals().get(SignalConfig.FRAUD_CHECK)).isInstanceOf(SignalState.Pending.class);
             assertThat(loaded.getCreatedAt()).isEqualTo(NOW);
             assertThat(loaded.getTimeoutAt()).isEqualTo(TIMEOUT);
         }
@@ -63,8 +64,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
 
             assertThat(loaded.getPaymentType()).isEqualTo(PaymentType.INVOICE);
             assertThat(loaded.getSignals()).containsOnlyKeys(SignalConfig.FRAUD_CHECK);
-            assertThat(loaded.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
+            assertThat(loaded.getSignals().get(SignalConfig.FRAUD_CHECK)).isInstanceOf(SignalState.Pending.class);
         }
     }
 
@@ -91,6 +91,64 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
     }
 
     /** Repository-level write path for the signals JSONB column (ADR-16 §Write path). */
+    /**
+     * The {@code signals} column is written by the injected {@link JsonMapper} (through
+     * {@link SignalMapJson}) and read back by Hibernate's format mapper. This is the repository's
+     * first polymorphic type, so the two are proved to agree here rather than assumed to.
+     */
+    @Nested
+    class PolymorphicSignalStateStorage {
+
+        @Test
+        @Transactional
+        void everyVariantSurvivesTheColumn() {
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
+
+            var written = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
+            written.put(SignalConfig.GEO_SCORE, new SignalState.NoResult("geocoding_failed"));
+            written.put(SignalConfig.FRAUD_CHECK, new SignalState.NotExecuted("timeout"));
+            repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, written));
+
+            var raw = jdbcTemplate.queryForObject(
+                    "SELECT signals::text FROM enrollment_hub.enrollments WHERE enrollment_id = ?",
+                    String.class, enrollmentId);
+
+            // The discriminator must reach the column. An untyped writeValueAsString(map) drops it
+            // — Jackson resolves map values by runtime class — and the read below then fails with
+            // "missing type id property 'kind'". Asserting the raw text pins the write side.
+            assertThat(raw).contains("\"kind\": \"NO_RESULT\"").contains("\"kind\": \"NOT_EXECUTED\"");
+
+            var readBack = jdbcTemplate.queryForObject(
+                    "SELECT signals::text FROM enrollment_hub.enrollments WHERE enrollment_id = ?",
+                    String.class, enrollmentId);
+            assertThat(jsonMapper.readValue(readBack,
+                    new TypeReference<HashMap<SignalConfig, SignalState>>() {}))
+                    .isEqualTo(written);
+        }
+
+        @Test
+        @Transactional
+        void hibernateReadsBackWhatTheInjectedMapperWrote() {
+            var enrollmentId = UUID.randomUUID();
+            repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
+
+            var written = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
+            written.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.EXTREME));
+            written.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.FAILED));
+            repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, written));
+
+            // updateSignals is a bulk UPDATE, so the persistence context still holds the entity as
+            // it was saved. Clear it, or findById answers from the L1 cache and proves nothing.
+            entityManager.clear();
+
+            // Now a real read: Hibernate's format mapper deserialises the column. Equality here is
+            // the two mappers agreeing on the discriminator — the pair this refactor introduces.
+            var entity = repository.findById(enrollmentId).orElseThrow();
+            assertThat(entity.getSignals()).isEqualTo(written);
+        }
+    }
+
     @Nested
     class UpdateSignals {
 
@@ -102,8 +160,8 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
 
             // Build a new signal map: GEO_SCORE settled HIGH; FRAUD_CHECK still PENDING.
             var newSignals = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
-            newSignals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.HIGH));
-            var json = jsonMapper.writeValueAsString(newSignals);
+            newSignals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.HIGH));
+            var json = SignalMapJson.write(jsonMapper, newSignals);
 
             int rows = repository.updateSignals(enrollmentId, json);
 
@@ -114,7 +172,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Test
         @Transactional
         void returnsZero_whenEnrollmentIdDoesNotExist() {
-            var json = jsonMapper.writeValueAsString(
+            var json = SignalMapJson.write(jsonMapper, 
                     SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
 
             int rows = repository.updateSignals(UUID.randomUUID(), json);
@@ -133,12 +191,12 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             repository.saveAndFlush(TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT));
 
             var firstWrite = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
-            firstWrite.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(firstWrite));
+            firstWrite.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
+            repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, firstWrite));
 
             var secondWrite = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
-            secondWrite.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
-            repository.updateSignals(enrollmentId, jsonMapper.writeValueAsString(secondWrite));
+            secondWrite.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+            repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, secondWrite));
 
             assertSignalsRoundTrip(enrollmentId, secondWrite);
         }
@@ -149,8 +207,8 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
     class CompleteWithDecisionMethod {
 
         private static final String SETTLED_SIGNALS_JSON = """
-                {"FRAUD_CHECK":{"processingState":"SETTLED","outcome":"OK"},
-                 "GEO_SCORE":{"processingState":"SETTLED","riskLevel":"LOW"}}
+                {"FRAUD_CHECK":{"kind":"CHECKED","outcome":"OK"},
+                 "GEO_SCORE":{"kind":"SCORED","riskLevel":"LOW"}}
                 """;
 
         @Test
@@ -272,8 +330,8 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
             // Direct map mutation here is test-only state-setup (analogous to a SQL
             // INSERT in fixtures). Production code path writes via repository.updateSignals.
-            entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-            entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            entity.getSignals().put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
 
             assertThat(SignalConfig.allSettled(entity.getSignals())).isTrue();
         }
@@ -282,7 +340,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Transactional
         void creditCardNotCompleteAfterGeoOnly() {
             var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
-            entity.getSignals().put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
+            entity.getSignals().put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
 
             assertThat(SignalConfig.allSettled(entity.getSignals())).isFalse();
         }
@@ -291,7 +349,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Transactional
         void invoiceCompleteAfterFraudOnly() {
             var entity = TestEntityFactory.invoice(UUID.randomUUID(), NOW, TIMEOUT);
-            entity.getSignals().put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
 
             assertThat(SignalConfig.allSettled(entity.getSignals())).isTrue();
         }

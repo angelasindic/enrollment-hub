@@ -154,8 +154,8 @@ class DecisionDispatcherTest {
      */
     private static EnrollmentEntity decidedEntity(UUID enrollmentId, UUID decisionId) {
         var signals = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
-        signals.put(SignalConfig.GEO_SCORE, SignalState.settled(RiskLevel.LOW));
-        signals.put(SignalConfig.FRAUD_CHECK, SignalState.settled(SignalOutcome.OK));
+        signals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
+        signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
 
         var entity = mock(EnrollmentEntity.class);
         lenient().when(entity.getEnrollmentId()).thenReturn(enrollmentId);

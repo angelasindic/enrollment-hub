@@ -29,10 +29,14 @@ class EnumCompatibilityTest {
     }
 
     @Test
-    void domainSignalOutcomeEqualsContracts() {
+    void domainSignalOutcomeIsSubsetOfContracts() {
+        // Subset, not equality: the domain enum is {OK, FAILED} because "ran but produced no
+        // result" is the SignalState.NoResult variant, which applies to score-style signals too —
+        // something SignalOutcome.NO_RESULT never could. The contract keeps NO_RESULT because
+        // FraudCheckResult still carries it on the wire (ADR-06).
         Set<String> domain    = enumNames(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.class);
         Set<String> contracts = enumNames(SignalOutcome.class);
-        assertThat(domain).isEqualTo(contracts);
+        assertThat(contracts).containsAll(domain);
     }
 
     @Test

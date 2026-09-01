@@ -55,7 +55,7 @@ public class EnrollmentCorrelationService {
             String signalsJson;
             try {
                 originalRequest = jsonMapper.writeValueAsString(enrollmentData);
-                signalsJson = jsonMapper.writeValueAsString(SignalConfig.initializeFor(paymentType));
+                signalsJson = SignalMapJson.write(jsonMapper, SignalConfig.initializeFor(paymentType));
             } catch (JacksonException jackExc) {
                 throw new EnrollmentSerializationException(enrollmentId, jackExc);
             }

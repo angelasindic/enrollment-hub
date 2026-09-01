@@ -23,10 +23,8 @@ class EnrollmentEntityTest {
 
             assertThat(entity.getPaymentType()).isEqualTo(PaymentType.CREDIT_CARD);
             assertThat(entity.getSignals()).containsOnlyKeys(SignalConfig.GEO_SCORE, SignalConfig.FRAUD_CHECK);
-            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
-            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
+            assertThat(entity.getSignals().get(SignalConfig.GEO_SCORE)).isInstanceOf(SignalState.Pending.class);
+            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK)).isInstanceOf(SignalState.Pending.class);
         }
 
         @Test
@@ -55,8 +53,7 @@ class EnrollmentEntityTest {
 
             assertThat(entity.getPaymentType()).isEqualTo(PaymentType.INVOICE);
             assertThat(entity.getSignals()).containsOnlyKeys(SignalConfig.FRAUD_CHECK);
-            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK).processingState())
-                    .isEqualTo(SignalProcessingState.PENDING);
+            assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK)).isInstanceOf(SignalState.Pending.class);
         }
     }
 

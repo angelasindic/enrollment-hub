@@ -20,6 +20,11 @@ CREATE TABLE enrollment_hub.enrollments (
     -- Signal state map (JSONB)
     -- Map keyed by SignalConfig name (e.g. 'GEO_SCORE', 'FRAUD_CHECK').
     -- Only signals applicable to the route are present; absence = not applicable.
+    -- Each value is a tagged SignalState variant carrying a "kind" discriminator:
+    --   {"kind":"PENDING"} | {"kind":"CHECKED","outcome":"OK"} | {"kind":"SCORED","riskLevel":"HIGH"}
+    --   {"kind":"NO_RESULT","reason":"..."} | {"kind":"NOT_EXECUTED","reason":"timeout"}
+    -- The column is opaque to every application query; only ad-hoc and operational
+    -- queries read inside it, and they match on "kind" (see the GIN index below).
     signals                 JSONB           NOT NULL,
 
     -- Intake idempotency ledger (ADR-13 §Ingress Inversion & Consumer-Side State Machine).
