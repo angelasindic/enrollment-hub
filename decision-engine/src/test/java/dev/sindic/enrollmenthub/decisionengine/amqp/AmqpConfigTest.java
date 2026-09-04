@@ -40,6 +40,20 @@ class AmqpConfigTest {
     }
 
     @Test
+    void listenerRetryPolicy_doesNotRetryAMessageThatCannotBeConverted() {
+        // A contract rejecting itself surfaces here wrapped: MessageConversionException ←
+        // ValueInstantiationException ← IllegalArgumentException. Redelivery brings the same bytes,
+        // so the only useful destination is the DLQ, with the payload intact for triage.
+        var policy = AmqpConfig.listenerRetryPolicy();
+
+        var wrapped = new org.springframework.amqp.support.converter.MessageConversionException(
+                "cannot construct GeoScoreResult",
+                new IllegalArgumentException("set exactly one of riskLevel and noResultReason"));
+
+        assertThat(policy.shouldRetry(wrapped)).isFalse();
+    }
+
+    @Test
     void listenerRetryPolicy_retriesTransientRuntimeException() {
         // Anything not on the excludes list retries — typical case: broker
         // hiccup, transient DB error, deserialization that succeeds on a re-poll.

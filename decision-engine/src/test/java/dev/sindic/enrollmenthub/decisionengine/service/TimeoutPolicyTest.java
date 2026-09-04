@@ -6,7 +6,7 @@ import dev.sindic.enrollmenthub.decisionengine.domain.GateClassification;
 import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import org.junit.jupiter.api.Test;
 
@@ -96,6 +96,6 @@ class TimeoutPolicyTest {
         var timedOut = EnrollmentService.applyTimeoutPolicy(signals);
 
         assertThat(timedOut.get(required.get()))
-                .isEqualTo(new SignalState.Checked(SignalOutcome.FAILED));
+                .isEqualTo(new SignalState.Checked(CheckOutcome.FAILED));
     }
 }

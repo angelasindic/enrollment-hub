@@ -4,6 +4,7 @@ import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.api.EnrollmentRequest;
 import dev.sindic.enrollmenthub.contracts.events.DecisionResult;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
+import dev.sindic.enrollmenthub.contracts.events.CheckOutcome;
 import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
 import org.junit.jupiter.api.Test;
 
@@ -34,7 +35,7 @@ class EnumCompatibilityTest {
         // result" is the SignalState.NoResult variant, which applies to score-style signals too —
         // something SignalOutcome.NO_RESULT never could. The contract keeps NO_RESULT because
         // FraudCheckResult still carries it on the wire (ADR-06).
-        Set<String> domain    = enumNames(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.class);
+        Set<String> domain    = enumNames(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.class);
         Set<String> contracts = enumNames(SignalOutcome.class);
         assertThat(contracts).containsAll(domain);
     }

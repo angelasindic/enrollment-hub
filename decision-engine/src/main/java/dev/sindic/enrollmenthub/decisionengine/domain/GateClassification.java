@@ -7,11 +7,11 @@ package dev.sindic.enrollmenthub.decisionengine.domain;
  *
  * <ul>
  *   <li>{@code REQUIRED} — <b>fail-closed</b>: an unanswered signal is settled as
- *       {@link SignalOutcome#FAILED} by the ADR-15 timeout policy, which drives
+ *       {@link CheckOutcome#FAILED} by the ADR-15 timeout policy, which drives
  *       {@link DecisionResult#REJECTED}. Authoritative. Unused today; reserved for checks such as
  *       sanctions screening.</li>
  *   <li>{@code BEST_EFFORT} — <b>fail-open</b>: an unanswered signal contributes nothing, but an
- *       explicit {@link SignalOutcome#FAILED} drives {@link DecisionResult#REJECTED}.
+ *       explicit {@link CheckOutcome#FAILED} drives {@link DecisionResult#REJECTED}.
  *       Authoritative.</li>
  *   <li>{@code SCORING_SIGNAL} — <b>fail-open</b>, advisory: can raise
  *       {@link DecisionResult#CONDITIONAL_APPROVED} at HIGH or EXTREME, never

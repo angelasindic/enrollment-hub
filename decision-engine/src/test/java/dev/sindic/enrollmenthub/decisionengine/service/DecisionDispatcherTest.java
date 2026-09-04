@@ -5,7 +5,7 @@ import dev.sindic.enrollmenthub.decisionengine.amqp.EnrollmentDecisionPublisher;
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
@@ -155,7 +155,7 @@ class DecisionDispatcherTest {
     private static EnrollmentEntity decidedEntity(UUID enrollmentId, UUID decisionId) {
         var signals = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
         signals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
-        signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+        signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
 
         var entity = mock(EnrollmentEntity.class);
         lenient().when(entity.getEnrollmentId()).thenReturn(enrollmentId);

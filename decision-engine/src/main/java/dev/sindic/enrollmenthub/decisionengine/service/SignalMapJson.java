@@ -10,31 +10,24 @@ import java.util.Map;
 /**
  * Serialises the {@code signals} map for the JSONB column.
  *
- * <p>The explicit type token is load-bearing, not decoration. {@link SignalState} is polymorphic and
- * carries its {@code kind} discriminator through {@code @JsonTypeInfo} on the sealed interface.
- * Handed a bare {@code Map} — whose value type is erased — Jackson resolves each value's serialiser
- * from its runtime class and writes it <em>without</em> the discriminator:
+ * <p>{@link SignalState} carries a {@code kind} discriminator from {@code @JsonTypeInfo} on the
+ * sealed interface. Handed a bare {@code Map}, whose value type is erased, Jackson picks each
+ * value's serialiser from its runtime class and omits the tag:
  *
  * <pre>
- * writeValueAsString(map)          → {"GEO_SCORE":{"riskLevel":"HIGH"}}            // unreadable
+ * writeValueAsString(map)          → {"GEO_SCORE":{"riskLevel":"HIGH"}}
  * writerFor(SIGNAL_MAP).write(map) → {"GEO_SCORE":{"kind":"SCORED","riskLevel":"HIGH"}}
  * </pre>
  *
- * <p>The first form round-trips fine at the root ({@code writeValueAsString(state)} keeps the tag)
- * and fails only inside a collection, so it is easy to miss. It is also not a cosmetic difference:
- * Hibernate reads the column back against the field's declared {@code Map<SignalConfig, SignalState>}
- * and rejects a value with no {@code kind}, so an untyped write produces a row that cannot be read.
- * Every write to the column goes through here — production and tests alike — so the two
- * mappers cannot disagree.
+ * <p>Hibernate reads the column against the declared {@code Map<SignalConfig, SignalState>} and
+ * rejects a value with no {@code kind}, so the first form writes rows that cannot be read back. The
+ * tag survives at the root of a document, so the bug appears only inside a collection. Every write
+ * goes through here, tests included.
  *
- * <p><b>There is no {@code read} counterpart</b>, and the omission is deliberate: production never
- * deserialises this column through Jackson. Hibernate does, taking the value type from
- * {@code EnrollmentEntity.signals}'s declaration, which erasure does not reach. Note that the two
- * failure modes are not equivalent — an untyped write drops the discriminator and the next read
- * throws {@code InvalidTypeIdException}, whereas an untyped read
- * ({@code readValue(json, Map.class)}) throws nothing and yields {@code LinkedHashMap} values, so
- * every {@code instanceof} pattern silently fails to match and aggregation fails every signal open.
- * If a production read is ever added, give it the type token.
+ * <p>No {@code read} counterpart: production deserialises this column only through Hibernate, which
+ * takes the type from {@code EnrollmentEntity.signals}. An untyped read fails worse — it yields
+ * {@code LinkedHashMap} values and throws nothing, so every {@code instanceof} pattern silently
+ * fails to match. Give a production read the type token if one is ever added.
  *
  * @see SignalState why the domain type is the persisted format, and what that costs
  */

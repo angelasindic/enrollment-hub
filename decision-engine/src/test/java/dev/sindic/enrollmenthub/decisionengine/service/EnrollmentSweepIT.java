@@ -6,9 +6,10 @@ import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
+import dev.sindic.enrollmenthub.contracts.events.EnrollmentSignal;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -95,6 +96,13 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
         assertThat(decision.decisionResult())
                 .isEqualTo(dev.sindic.enrollmenthub.contracts.events.DecisionResult.APPROVED);
         assertThat(decision.decidedAt()).isNotNull();
+
+        // C1, end to end: the decision is APPROVED precisely because both checks failed open, so
+        // the published signals must not read as adverse. Before the fix both said FAILED.
+        assertThat(decision.signals().get("GEO_SCORE"))
+                .isEqualTo(EnrollmentSignal.notExecuted("timeout"));
+        assertThat(decision.signals().get("FRAUD_CHECK"))
+                .isEqualTo(EnrollmentSignal.notExecuted("timeout"));
     }
 
     @Test
@@ -232,7 +240,7 @@ class EnrollmentSweepIT extends BaseIntegrationTest {
                     enrollmentId, Instant.now(), Instant.now().plusSeconds(300)));
             var settled = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
             settled.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
-            settled.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+            settled.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
             repository.completeWithDecision(enrollmentId,
                     SignalMapJson.write(jsonMapper, settled), "APPROVED", decisionId, decidedAt);
         });

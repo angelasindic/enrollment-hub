@@ -3,6 +3,8 @@ package dev.sindic.enrollmenthub.decisionengine.domain;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
+import java.util.Objects;
+
 /**
  * The settled or in-flight state of one signal (ADR-14). Five variants, each carrying only the data
  * it has, so an invalid combination cannot be constructed.
@@ -39,15 +41,31 @@ public sealed interface SignalState {
     record Pending() implements SignalState {}
 
     /** Check-style signal produced a verdict (BEST_EFFORT / REQUIRED). */
-    record Checked(SignalOutcome outcome) implements SignalState {}
+    record Checked(CheckOutcome outcome) implements SignalState {
+        public Checked {
+            Objects.requireNonNull(outcome, "a checked signal records its verdict");
+        }
+    }
 
     /** Score-style signal produced a risk tier (SCORING_SIGNAL). */
-    record Scored(RiskLevel riskLevel) implements SignalState {}
+    record Scored(RiskLevel riskLevel) implements SignalState {
+        public Scored {
+            Objects.requireNonNull(riskLevel, "a scored signal records its risk tier");
+        }
+    }
 
     /** Ran, could not produce a result. Fail-open. */
-    record NoResult(String reason) implements SignalState {}
+    record NoResult(String reason) implements SignalState {
+        public NoResult {
+            Objects.requireNonNull(reason, "a no-result records why there is no result");
+        }
+    }
 
     /** Never ran — timeout or crash. Fail-open. */
-    record NotExecuted(String reason) implements SignalState {}
+    record NotExecuted(String reason) implements SignalState {
+        public NotExecuted {
+            Objects.requireNonNull(reason, "a signal that never ran records why it is missing");
+        }
+    }
 }
 

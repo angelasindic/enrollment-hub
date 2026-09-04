@@ -8,7 +8,7 @@ import java.util.UUID;
  *
  * <p>One pass over the map dispatching on {@link GateClassification}, accumulating two flags —
  * {@code rejected} (a {@code BEST_EFFORT} or {@code REQUIRED} signal settled
- * {@link SignalOutcome#FAILED}) and {@code reviewRequired} (a {@code SCORING_SIGNAL} settled
+ * {@link CheckOutcome#FAILED}) and {@code reviewRequired} (a {@code SCORING_SIGNAL} settled
  * {@link RiskLevel#HIGH} or {@code EXTREME}) — resolved in priority order
  * {@code REJECTED} &gt; {@code CONDITIONAL_APPROVED} &gt; {@code APPROVED}.
  *
@@ -56,7 +56,7 @@ public final class DecisionEngine {
             }
             switch (config.classification()) {
                 case BEST_EFFORT, REQUIRED -> {
-                    if (state instanceof SignalState.Checked(var outcome) && outcome == SignalOutcome.FAILED)
+                    if (state instanceof SignalState.Checked(var outcome) && outcome == CheckOutcome.FAILED)
                         rejected = true;
                 }
                 case SCORING_SIGNAL -> {

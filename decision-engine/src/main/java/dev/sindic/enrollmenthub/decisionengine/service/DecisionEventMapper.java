@@ -65,23 +65,21 @@ final class DecisionEventMapper {
     /**
      * Flattens a {@link SignalState} onto the published three-field {@link EnrollmentSignal}.
      *
-     * <p>Exhaustive by design — a sixth variant stops this compiling. {@code NotExecuted} still
-     * publishes as {@link SignalOutcome#FAILED} because the contract has no value for "never ran"
-     * yet; that is the C1 defect, kept here deliberately so this commit stays behaviour-preserving
-     * and the fix lands as a diff of its own (ADR-14 §Costs).
+     * <p>Exhaustive by design — a sixth variant stops this compiling. Each branch goes through an
+     * {@link EnrollmentSignal} factory, so the published combination is validated.
      */
     private static EnrollmentSignal toContractSignal(SignalState state) {
         return switch (state) {
             case SignalState.Pending ignored -> throw new IllegalStateException(
                     "PENDING signal reached the decision event mapper");
             case SignalState.Checked(var outcome) ->
-                    new EnrollmentSignal(SignalOutcome.valueOf(outcome.name()), null, null);
+                    EnrollmentSignal.checked(SignalOutcome.valueOf(outcome.name()));
             case SignalState.Scored(var riskLevel) ->
-                    new EnrollmentSignal(null, mapRiskLevel(riskLevel), null);
+                    EnrollmentSignal.scored(mapRiskLevel(riskLevel));
             case SignalState.NoResult(var reason) ->
-                    new EnrollmentSignal(null, null, reason);
+                    EnrollmentSignal.noResult(reason);
             case SignalState.NotExecuted(var reason) ->
-                    new EnrollmentSignal(SignalOutcome.FAILED, null, reason);
+                    EnrollmentSignal.notExecuted(reason);
         };
     }
 

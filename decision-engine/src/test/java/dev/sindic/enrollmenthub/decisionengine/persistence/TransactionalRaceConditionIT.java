@@ -4,7 +4,7 @@ import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.service.SignalMapJson;
 import org.junit.jupiter.api.Test;
@@ -74,7 +74,7 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         //       so both reads land before either write. NO SELECT FOR UPDATE.
         runConcurrentReadModifyWrite(enrollmentId, /* useSelectForUpdate */ false,
                 SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW),
-                SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+                SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
 
         // THEN: only ONE of the two signals is SETTLED. The other was overwritten
         //       by the loser's stale-snapshot UPDATE. This is the lost-update race.
@@ -103,7 +103,7 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         //       fresh data instead of stale data.
         runConcurrentReadModifyWrite(enrollmentId, /* useSelectForUpdate */ true,
                 SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW),
-                SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+                SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
 
         // THEN: both signals SETTLED — no lost update.
         Map<SignalConfig, SignalState> finalSignals = readSignals(enrollmentId);

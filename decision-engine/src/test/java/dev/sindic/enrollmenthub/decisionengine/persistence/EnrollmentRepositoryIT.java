@@ -135,7 +135,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
 
             var written = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
             written.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.EXTREME));
-            written.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.FAILED));
+            written.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.FAILED));
             repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, written));
 
             // updateSignals is a bulk UPDATE, so the persistence context still holds the entity as
@@ -195,7 +195,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, firstWrite));
 
             var secondWrite = new EnumMap<>(SignalConfig.initializeFor(PaymentType.CREDIT_CARD));
-            secondWrite.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+            secondWrite.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
             repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, secondWrite));
 
             assertSignalsRoundTrip(enrollmentId, secondWrite);
@@ -331,7 +331,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
             // Direct map mutation here is test-only state-setup (analogous to a SQL
             // INSERT in fixtures). Production code path writes via repository.updateSignals.
             entity.getSignals().put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
-            entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
 
             assertThat(SignalConfig.allSettled(entity.getSignals())).isTrue();
         }
@@ -349,7 +349,7 @@ class EnrollmentRepositoryIT extends BaseIntegrationTest {
         @Transactional
         void invoiceCompleteAfterFraudOnly() {
             var entity = TestEntityFactory.invoice(UUID.randomUUID(), NOW, TIMEOUT);
-            entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+            entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
 
             assertThat(SignalConfig.allSettled(entity.getSignals())).isTrue();
         }

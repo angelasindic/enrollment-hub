@@ -28,13 +28,13 @@ class DecisionEngineTest {
     }
 
     /** Credit card with both signals settled. */
-    private static Map<SignalConfig, SignalState> creditCard(SignalOutcome fraud, RiskLevel geo) {
+    private static Map<SignalConfig, SignalState> creditCard(CheckOutcome fraud, RiskLevel geo) {
         return signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(fraud),
                        SignalConfig.GEO_SCORE,   new SignalState.Scored(geo));
     }
 
     /** Credit card with fraud settled, geo timed out (FAILED). */
-    private static Map<SignalConfig, SignalState> creditCardGeoFailed(SignalOutcome fraud) {
+    private static Map<SignalConfig, SignalState> creditCardGeoFailed(CheckOutcome fraud) {
         return signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(fraud),
                        SignalConfig.GEO_SCORE,   new SignalState.NotExecuted("timeout"));
     }
@@ -46,7 +46,7 @@ class DecisionEngineTest {
     }
 
     /** Invoice with fraud settled. */
-    private static Map<SignalConfig, SignalState> invoice(SignalOutcome fraud) {
+    private static Map<SignalConfig, SignalState> invoice(CheckOutcome fraud) {
         return signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(fraud));
     }
 
@@ -76,7 +76,7 @@ class DecisionEngineTest {
     void evaluate_partiallySettledMap_namesTheOffendingSignal() {
         // One signal settled, one still PENDING — the guard must identify which.
         var enrollmentId = UUID.randomUUID();
-        var partial = signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK),
+        var partial = signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK),
                               SignalConfig.GEO_SCORE,   new SignalState.Pending());
 
         assertThatThrownBy(() -> DecisionEngine.evaluate(partial, enrollmentId))
@@ -92,44 +92,44 @@ class DecisionEngineTest {
 
         @Test
         void fraudOk_geoLow_approved() {
-            assertThat(evaluate(creditCard(SignalOutcome.OK, RiskLevel.LOW)).decision())
+            assertThat(evaluate(creditCard(CheckOutcome.OK, RiskLevel.LOW)).decision())
                     .isEqualTo(APPROVED);
         }
 
         @Test
         void fraudOk_geoMedium_approved() {
-            assertThat(evaluate(creditCard(SignalOutcome.OK, RiskLevel.MEDIUM)).decision())
+            assertThat(evaluate(creditCard(CheckOutcome.OK, RiskLevel.MEDIUM)).decision())
                     .isEqualTo(APPROVED);
         }
 
         @Test
         void fraudOk_geoHigh_conditionalApproved() {
-            assertThat(evaluate(creditCard(SignalOutcome.OK, RiskLevel.HIGH)).decision())
+            assertThat(evaluate(creditCard(CheckOutcome.OK, RiskLevel.HIGH)).decision())
                     .isEqualTo(CONDITIONAL_APPROVED);
         }
 
         @Test
         void fraudOk_geoExtreme_conditionalApproved() {
-            assertThat(evaluate(creditCard(SignalOutcome.OK, RiskLevel.EXTREME)).decision())
+            assertThat(evaluate(creditCard(CheckOutcome.OK, RiskLevel.EXTREME)).decision())
                     .isEqualTo(CONDITIONAL_APPROVED);
         }
 
         @Test
         void fraudFailed_geoLow_rejected() {
-            assertThat(evaluate(creditCard(SignalOutcome.FAILED, RiskLevel.LOW)).decision())
+            assertThat(evaluate(creditCard(CheckOutcome.FAILED, RiskLevel.LOW)).decision())
                     .isEqualTo(REJECTED);
         }
 
         @Test
         void fraudFailed_geoHigh_rejected() {
             // REJECTED from BEST_EFFORT overrides CONDITIONAL_APPROVED from SCORING_SIGNAL
-            assertThat(evaluate(creditCard(SignalOutcome.FAILED, RiskLevel.HIGH)).decision())
+            assertThat(evaluate(creditCard(CheckOutcome.FAILED, RiskLevel.HIGH)).decision())
                     .isEqualTo(REJECTED);
         }
 
         @Test
         void fraudFailed_geoExtreme_rejected() {
-            assertThat(evaluate(creditCard(SignalOutcome.FAILED, RiskLevel.EXTREME)).decision())
+            assertThat(evaluate(creditCard(CheckOutcome.FAILED, RiskLevel.EXTREME)).decision())
                     .isEqualTo(REJECTED);
         }
 
@@ -153,7 +153,7 @@ class DecisionEngineTest {
 
         @Test
         void geoTimedOut_fraudOk_approved() {
-            assertThat(evaluate(creditCardGeoFailed(SignalOutcome.OK)).decision())
+            assertThat(evaluate(creditCardGeoFailed(CheckOutcome.OK)).decision())
                     .isEqualTo(APPROVED);
         }
 
@@ -168,7 +168,7 @@ class DecisionEngineTest {
         @Test
         void geoTimedOut_fraudFailed_rejected() {
             // Fraud FAILED outcome is explicit — REJECTED even though geo timed out
-            var settled = signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.FAILED),
+            var settled = signals(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.FAILED),
                                   SignalConfig.GEO_SCORE,   new SignalState.NotExecuted("timeout"));
             assertThat(evaluate(settled).decision()).isEqualTo(REJECTED);
         }
@@ -208,7 +208,7 @@ class DecisionEngineTest {
         void geoSettledWithoutResult_fraudOk_approved() {
             // Geocoding failure → settled without score → fail-open
             var settled = signals(SignalConfig.GEO_SCORE,   new SignalState.NoResult("geocoding_failed"),
-                                  SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+                                  SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
             assertThat(evaluate(settled).decision()).isEqualTo(APPROVED);
         }
     }
@@ -220,12 +220,12 @@ class DecisionEngineTest {
 
         @Test
         void fraudOk_approved() {
-            assertThat(evaluate(invoice(SignalOutcome.OK)).decision()).isEqualTo(APPROVED);
+            assertThat(evaluate(invoice(CheckOutcome.OK)).decision()).isEqualTo(APPROVED);
         }
 
         @Test
         void fraudFailed_rejected() {
-            assertThat(evaluate(invoice(SignalOutcome.FAILED)).decision()).isEqualTo(REJECTED);
+            assertThat(evaluate(invoice(CheckOutcome.FAILED)).decision()).isEqualTo(REJECTED);
         }
 
         @Test
@@ -246,7 +246,7 @@ class DecisionEngineTest {
     /**
      * ADR-14 compliance — asymmetric aggregation property.
      *
-     * <p>For every {@link RiskLevel}, with {@link SignalOutcome#OK} from the fraud check
+     * <p>For every {@link RiskLevel}, with {@link CheckOutcome#OK} from the fraud check
      * and both signals settled with a result, the result is
      * {@code APPROVED} or {@code CONDITIONAL_APPROVED} — never {@code REJECTED}.
      * Proves that a {@link GateClassification#SCORING_SIGNAL} cannot drive rejection
@@ -256,7 +256,7 @@ class DecisionEngineTest {
     @EnumSource(RiskLevel.class)
     void scoringSignal_cannotDriveRejected(RiskLevel level) {
         // Both signals SETTLED: fraud OK, geo at every possible risk level.
-        var result = evaluate(creditCard(SignalOutcome.OK, level));
+        var result = evaluate(creditCard(CheckOutcome.OK, level));
         assertThat(result.decision()).isNotEqualTo(REJECTED);
     }
 
@@ -266,7 +266,7 @@ class DecisionEngineTest {
     void rejected_overrides_conditionalApproved() {
         // FRAUD_CHECK FAILED (→ rejected) + GEO_SCORE EXTREME (→ reviewRequired)
         // REJECTED must win
-        assertThat(evaluate(creditCard(SignalOutcome.FAILED, RiskLevel.EXTREME)).decision())
+        assertThat(evaluate(creditCard(CheckOutcome.FAILED, RiskLevel.EXTREME)).decision())
                 .isEqualTo(REJECTED);
     }
 }

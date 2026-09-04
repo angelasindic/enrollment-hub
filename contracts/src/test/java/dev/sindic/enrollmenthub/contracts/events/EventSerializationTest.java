@@ -145,6 +145,49 @@ class EventSerializationTest {
     }
 
     @Test
+    void fraudCheckResult_noResultWithoutReason_throws() {
+        // A missing verdict is not worth much without one — the same rule GeoScoreResult applies.
+        assertThrows(IllegalArgumentException.class,
+                () -> new FraudCheckResult(UUID.randomUUID(), CheckOutcome.NO_RESULT, null));
+    }
+
+    @Test
+    void fraudCheckResult_verdictWithAReason_throws() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new FraudCheckResult(UUID.randomUUID(), CheckOutcome.OK, "provider_unavailable"));
+    }
+
+    @Test
+    void fraudCheckResult_noResultReasonReachesThePublishedSignal() throws Exception {
+        // The point of the field: an operator can tell a provider outage from a thin file.
+        var original = FraudCheckResult.noResult(UUID.randomUUID(), "provider_unavailable");
+        var json = mapper.writeValueAsString(original);
+
+        assertEquals(original, mapper.readValue(json, FraudCheckResult.class));
+        assertEquals("provider_unavailable", original.noResultReason());
+    }
+
+    @Test
+    void geoScoreResult_noRiskLevelAndNoReason_throws() {
+        // Without this the listener stores NoResult(null), which publishes fine until
+        // EnrollmentSignal.noResult rejects it — inside the dispatcher, after the decision is
+        // committed, where the relay then retries the same row every tick.
+        assertThrows(IllegalArgumentException.class,
+                () -> new GeoScoreResult(UUID.randomUUID(), null, null, Map.of(), List.of()));
+        assertThrows(IllegalArgumentException.class,
+                () -> new GeoScoreResult(UUID.randomUUID(), null, "  ", Map.of(), List.of()));
+    }
+
+    @Test
+    void geoScoreResult_bothRiskLevelAndReason_throws() {
+        // The other half of the XOR. Unguarded, the listener maps this to Scored and silently drops
+        // the reason — a contradiction resolved by discarding half of it.
+        assertThrows(IllegalArgumentException.class,
+                () -> new GeoScoreResult(UUID.randomUUID(), RiskLevel.HIGH, "geocoding_failed",
+                        Map.of(), List.of()));
+    }
+
+    @Test
     void geoScoreResult_nullEnrollmentId_throws() {
         assertThrows(NullPointerException.class,
                 () -> new GeoScoreResult(null, RiskLevel.LOW, null, Map.of(), List.of()));
@@ -161,7 +204,7 @@ class EventSerializationTest {
 
     @Test
     void fraudCheckResult_roundTrip() throws Exception {
-        var original = new FraudCheckResult(UUID.randomUUID(), SignalOutcome.OK);
+        var original = FraudCheckResult.checked(UUID.randomUUID(), CheckOutcome.OK);
         var json = mapper.writeValueAsString(original);
         var deserialized = mapper.readValue(json, FraudCheckResult.class);
         assertEquals(original, deserialized);
@@ -169,8 +212,12 @@ class EventSerializationTest {
 
     @Test
     void fraudCheckResult_allOutcomes_roundTrip() throws Exception {
-        for (var outcome : SignalOutcome.values()) {
-            var original = new FraudCheckResult(UUID.randomUUID(), outcome);
+        // Every value round-trips, and every value is meaningful: a worker's vocabulary has no
+        // term for "no reply arrived", so there is nothing here to reject.
+        for (var outcome : CheckOutcome.values()) {
+            var original = outcome == CheckOutcome.NO_RESULT
+                    ? FraudCheckResult.noResult(UUID.randomUUID(), "provider_unavailable")
+                    : FraudCheckResult.checked(UUID.randomUUID(), outcome);
             var json = mapper.writeValueAsString(original);
             var deserialized = mapper.readValue(json, FraudCheckResult.class);
             assertEquals(original, deserialized);
@@ -180,13 +227,81 @@ class EventSerializationTest {
     @Test
     void fraudCheckResult_nullEnrollmentId_throws() {
         assertThrows(NullPointerException.class,
-                () -> new FraudCheckResult(null, SignalOutcome.OK));
+                () -> FraudCheckResult.checked(null, CheckOutcome.OK));
     }
 
     @Test
     void fraudCheckResult_nullOutcome_throws() {
         assertThrows(NullPointerException.class,
-                () -> new FraudCheckResult(UUID.randomUUID(), null));
+                () -> FraudCheckResult.checked(UUID.randomUUID(), null));
+    }
+
+    // ── EnrollmentSignal ──────────────────────────────────────────────────────
+
+    @Test
+    void enrollmentSignal_factoriesProduceTheDocumentedShapes() {
+        assertEquals(new EnrollmentSignal(SignalOutcome.OK, null, null),
+                EnrollmentSignal.checked(SignalOutcome.OK));
+        assertEquals(new EnrollmentSignal(null, RiskLevel.HIGH, null),
+                EnrollmentSignal.scored(RiskLevel.HIGH));
+        assertEquals(new EnrollmentSignal(null, null, "geocoding_failed"),
+                EnrollmentSignal.noResult("geocoding_failed"));
+        assertEquals(new EnrollmentSignal(SignalOutcome.NOT_EXECUTED, null, "timeout"),
+                EnrollmentSignal.notExecuted("timeout"));
+    }
+
+    @Test
+    void enrollmentSignal_ranWithoutResult_isDistinctFromNeverAnswered() {
+        // The pair this contract exists to keep apart. Same null riskLevel, different outcome.
+        var ran      = EnrollmentSignal.noResult("geocoding_failed");
+        var neverRan = EnrollmentSignal.notExecuted("timeout");
+
+        assertNull(ran.outcome());
+        assertEquals(SignalOutcome.NOT_EXECUTED, neverRan.outcome());
+        assertNotEquals(ran, neverRan);
+    }
+
+    @Test
+    void enrollmentSignal_bothResultFields_throws() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new EnrollmentSignal(SignalOutcome.OK, RiskLevel.HIGH, null));
+    }
+
+    @Test
+    void enrollmentSignal_notExecutedWithoutReason_throws() {
+        // The reason is the only record of why the signal is missing.
+        assertThrows(IllegalArgumentException.class,
+                () -> new EnrollmentSignal(SignalOutcome.NOT_EXECUTED, null, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> new EnrollmentSignal(SignalOutcome.NOT_EXECUTED, null, "  "));
+    }
+
+    @Test
+    void enrollmentSignal_checkedRejectsNotExecuted() {
+        assertThrows(IllegalArgumentException.class,
+                () -> EnrollmentSignal.checked(SignalOutcome.NOT_EXECUTED));
+    }
+
+    @Test
+    void enrollmentSignal_notExecuted_roundTrips() throws Exception {
+        var original = EnrollmentSignal.notExecuted("timeout");
+        var json = mapper.writeValueAsString(original);
+        assertEquals(original, mapper.readValue(json, EnrollmentSignal.class));
+    }
+
+    @Test
+    void enrollmentSignal_wireShapeIsPinned() throws Exception {
+        // Round-trip and record equality both survive a change to the wire form — a naming
+        // strategy, a @JsonProperty, a renamed constant. Consumers parse these bytes, so assert
+        // the bytes. ADR-06 permits added fields; it does not permit renamed ones.
+        assertEquals("{\"outcome\":\"NOT_EXECUTED\",\"riskLevel\":null,\"reason\":\"timeout\"}",
+                mapper.writeValueAsString(EnrollmentSignal.notExecuted("timeout")));
+        assertEquals("{\"outcome\":null,\"riskLevel\":null,\"reason\":\"geocoding_failed\"}",
+                mapper.writeValueAsString(EnrollmentSignal.noResult("geocoding_failed")));
+        assertEquals("{\"outcome\":\"OK\",\"riskLevel\":null,\"reason\":null}",
+                mapper.writeValueAsString(EnrollmentSignal.checked(SignalOutcome.OK)));
+        assertEquals("{\"outcome\":null,\"riskLevel\":\"HIGH\",\"reason\":null}",
+                mapper.writeValueAsString(EnrollmentSignal.scored(RiskLevel.HIGH)));
     }
 
     // ── EnrollmentDecisionEvent ───────────────────────────────────────────────
@@ -230,7 +345,9 @@ class EventSerializationTest {
 
     @Test
     void enrollmentDecisionEvent_signalWithTimeout_roundTrip() throws Exception {
-        var signals = Map.of("GEO_SCORE", new EnrollmentSignal(null, null, "timeout"));
+        // A timed-out signal publishes NOT_EXECUTED with the reason — not a bare reason string,
+        // which is the "ran, produced nothing" shape and means something else (ADR-14).
+        var signals = Map.of("GEO_SCORE", EnrollmentSignal.notExecuted("timeout"));
         var original = new EnrollmentDecisionEvent(UUID.randomUUID(), enrollmentSnapshot(PaymentType.INVOICE),
                 DecisionResult.APPROVED, signals, Instant.now());
         var json = mapper.writeValueAsString(original);

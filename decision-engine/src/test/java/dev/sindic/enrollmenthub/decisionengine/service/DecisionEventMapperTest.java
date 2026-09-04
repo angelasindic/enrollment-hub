@@ -6,6 +6,7 @@ import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import dev.sindic.enrollmenthub.contracts.events.DecisionResult;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
 import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
+import dev.sindic.enrollmenthub.contracts.events.EnrollmentSignal;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -31,7 +32,7 @@ class DecisionEventMapperTest {
         var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
         var signals = creditCardSignals(
                 new SignalState.Scored(dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel.LOW),
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.OK));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK));
 
         var event = mapper.buildDecisionEvent(entity, signals, approved(), UUID.randomUUID(), DECIDED_AT);
 
@@ -47,7 +48,7 @@ class DecisionEventMapperTest {
         var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
         var signals = creditCardSignals(
                 new SignalState.Scored(dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel.HIGH),
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.OK));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK));
 
         var event = mapper.buildDecisionEvent(entity, signals,
                 dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult.CONDITIONAL_APPROVED,
@@ -62,7 +63,7 @@ class DecisionEventMapperTest {
         var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
         var signals = creditCardSignals(
                 new SignalState.Scored(dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel.LOW),
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.FAILED));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.FAILED));
 
         var event = mapper.buildDecisionEvent(entity, signals,
                 dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult.REJECTED,
@@ -72,18 +73,40 @@ class DecisionEventMapperTest {
         assertThat(event.signals().get("FRAUD_CHECK").outcome()).isEqualTo(SignalOutcome.FAILED);
     }
 
+    /**
+     * C1: a signal that never answered used to publish as {@code FAILED}, so an APPROVED decision
+     * carried an adverse outcome for the check that caused the approval to be safe. ADR-14:55
+     * requires "did not respond" stay distinguishable from "responded without a result".
+     */
     @Test
-    void geoScoreFailed_producesSignalFieldFailed() {
+    void geoScoreNeverAnswered_publishesNotExecutedWithTheReason() {
         var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
         var signals = creditCardSignals(
                 new SignalState.NotExecuted("timeout"),
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.OK));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK));
 
         var event = mapper.buildDecisionEvent(entity, signals, approved(), UUID.randomUUID(), DECIDED_AT);
 
-        var geoSignal = event.signals().get("GEO_SCORE");
-        assertThat(geoSignal.riskLevel()).isNull();
-        assertThat(geoSignal.outcome()).isEqualTo(SignalOutcome.FAILED);
+        assertThat(event.signals().get("GEO_SCORE"))
+                .isEqualTo(EnrollmentSignal.notExecuted("timeout"));
+    }
+
+    @Test
+    void neverAnsweredAndRanWithoutResult_publishDifferently() {
+        // Both fail open and both approve, so only the published signal tells them apart.
+        var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
+        var ok = new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK);
+
+        var neverRan = mapper.buildDecisionEvent(entity,
+                creditCardSignals(new SignalState.NotExecuted("timeout"), ok),
+                approved(), UUID.randomUUID(), DECIDED_AT).signals().get("GEO_SCORE");
+        var ran = mapper.buildDecisionEvent(entity,
+                creditCardSignals(new SignalState.NoResult("geocoding_failed"), ok),
+                approved(), UUID.randomUUID(), DECIDED_AT).signals().get("GEO_SCORE");
+
+        assertThat(neverRan.outcome()).isEqualTo(SignalOutcome.NOT_EXECUTED);
+        assertThat(ran.outcome()).isNull();
+        assertThat(neverRan).isNotEqualTo(ran);
     }
 
     @Test
@@ -91,7 +114,7 @@ class DecisionEventMapperTest {
         var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
         var signals = creditCardSignals(
                 new SignalState.NoResult("geocoding_failed"),
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.OK));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK));
 
         var event = mapper.buildDecisionEvent(entity, signals, approved(), UUID.randomUUID(), DECIDED_AT);
 
@@ -105,7 +128,7 @@ class DecisionEventMapperTest {
         var entity = TestEntityFactory.invoice(UUID.randomUUID(), NOW, TIMEOUT);
         var signals = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
         signals.put(SignalConfig.FRAUD_CHECK,
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.OK));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK));
 
         var event = mapper.buildDecisionEvent(entity, signals, approved(), UUID.randomUUID(), DECIDED_AT);
 
@@ -118,7 +141,7 @@ class DecisionEventMapperTest {
         var entity = TestEntityFactory.creditCard(UUID.randomUUID(), NOW, TIMEOUT);
         var signals = creditCardSignals(
                 new SignalState.Scored(dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel.LOW),
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.OK));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK));
         var decisionId = UUID.randomUUID();
 
         var event = mapper.buildDecisionEvent(entity, signals, approved(), decisionId, DECIDED_AT);
@@ -140,7 +163,7 @@ class DecisionEventMapperTest {
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
         var signals = creditCardSignals(
                 new SignalState.Scored(dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel.LOW),
-                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome.OK));
+                new SignalState.Checked(dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome.OK));
 
         var event = mapper.buildDecisionEvent(entity, signals, approved(), UUID.randomUUID(), DECIDED_AT);
         var json = JSON.writeValueAsString(event);

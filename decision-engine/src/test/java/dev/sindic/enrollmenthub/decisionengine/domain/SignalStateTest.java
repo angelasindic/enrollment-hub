@@ -27,8 +27,8 @@ class SignalStateTest {
     private static Stream<SignalState> everyVariant() {
         return Stream.of(
                 new SignalState.Pending(),
-                new SignalState.Checked(SignalOutcome.OK),
-                new SignalState.Checked(SignalOutcome.FAILED),
+                new SignalState.Checked(CheckOutcome.OK),
+                new SignalState.Checked(CheckOutcome.FAILED),
                 new SignalState.Scored(RiskLevel.HIGH),
                 new SignalState.NoResult("geocoding_failed"),
                 new SignalState.NotExecuted("timeout"));
@@ -66,7 +66,7 @@ class SignalStateTest {
 
     @Test
     void discriminatorIsWrittenAndNullFieldsAreNot() {
-        assertThat(mapper.writeValueAsString(new SignalState.Checked(SignalOutcome.OK)))
+        assertThat(mapper.writeValueAsString(new SignalState.Checked(CheckOutcome.OK)))
                 .isEqualTo("{\"kind\":\"CHECKED\",\"outcome\":\"OK\"}");
         assertThat(mapper.writeValueAsString(new SignalState.NotExecuted("timeout")))
                 .isEqualTo("{\"kind\":\"NOT_EXECUTED\",\"reason\":\"timeout\"}");
