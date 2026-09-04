@@ -29,6 +29,16 @@ class GeoScoreResultListener {
         }
     }
 
+    /**
+     * Inbound replies only. A timed-out GEO_SCORE still publishes {@code NOT_EXECUTED}, the same as
+     * fraud — that state comes from the timeout poller, never from a message, so no listener sees
+     * it. Nothing to reject here either: {@link GeoScoreResult} carries no
+     * {@link dev.sindic.enrollmenthub.contracts.events.SignalOutcome}, so unlike
+     * {@code FraudCheckResult} it has no field the value could arrive in. The contradiction geo
+     * <em>can</em> send — a contradiction between its two result fields — the record rejects itself:
+     * exactly one of {@code riskLevel} and {@code noResultReason} is set, so the two branches below
+     * are total and neither can be reached by a malformed reply.
+     */
     private static SignalState toSignalState(GeoScoreResult event) {
         if (event.riskLevel() == null) {
             return new SignalState.NoResult(event.noResultReason());

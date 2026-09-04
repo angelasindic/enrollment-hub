@@ -18,7 +18,7 @@ public record GeoScoreResult(
         UUID enrollmentId,
         /* Null when geocoding failed and no density measurement was possible. */
         RiskLevel riskLevel,
-        /* Non-null when riskLevel is null; describes why scoring could not run. */
+        /* Set when riskLevel is not, and only then; describes why scoring could not run. */
         String noResultReason,
         /* Radius (metres) → neighbor count. */
         Map<Integer, Integer> neighborCounts,
@@ -27,6 +27,15 @@ public record GeoScoreResult(
 ) {
     public GeoScoreResult {
         Objects.requireNonNull(enrollmentId, "enrollmentId must not be null");
+        // Exactly one: a measurement, or why there is none. Neither leaves the consumer with a
+        // no-result it cannot explain; both is a contradiction whose reason a reader would drop.
+        boolean measured = riskLevel != null;
+        boolean explained = Reason.isGiven(noResultReason);
+        if (measured == explained) {
+            throw new IllegalArgumentException(
+                    "set exactly one of riskLevel and noResultReason, got riskLevel=" + riskLevel
+                            + " noResultReason=" + noResultReason);
+        }
         neighborCounts = neighborCounts == null ? Map.of() : Map.copyOf(neighborCounts);
         triggeredThresholds = triggeredThresholds == null ? List.of() : List.copyOf(triggeredThresholds);
     }

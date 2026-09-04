@@ -70,7 +70,7 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
                     var entity = repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
                     sleep(200);
                     var updated = new EnumMap<>(entity.getSignals());
-                    updated.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+                    updated.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
                     repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, updated));
                     fraudSawComplete.set(SignalConfig.allSettled(updated));
                 });
@@ -89,7 +89,7 @@ class ConcurrentCompletionIT extends BaseIntegrationTest {
         assertThat(final_.getSignals().get(SignalConfig.GEO_SCORE))
                 .isEqualTo(new SignalState.Scored(RiskLevel.HIGH));
         assertThat(final_.getSignals().get(SignalConfig.FRAUD_CHECK))
-                .isEqualTo(new SignalState.Checked(SignalOutcome.OK));
+                .isEqualTo(new SignalState.Checked(CheckOutcome.OK));
         assertThat(SignalConfig.allSettled(final_.getSignals())).isTrue();
 
         assertThat(geoSawComplete.get() ^ fraudSawComplete.get())

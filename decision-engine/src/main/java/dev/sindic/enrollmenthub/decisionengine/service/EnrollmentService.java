@@ -4,7 +4,7 @@ import dev.sindic.enrollmenthub.decisionengine.domain.DecisionEngine;
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.GateClassification;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
@@ -188,8 +188,8 @@ public class EnrollmentService {
      *       {@link SignalState.NoResult}, which means the service ran and could not produce a
      *       value — a distinction ADR-14 requires the model to keep.</li>
      *   <li>{@code REQUIRED} — <b>fail closed</b>: settles as {@link SignalState.Checked} with
-     *       {@link SignalOutcome#FAILED}, which drives {@link DecisionResult#REJECTED}. An
-     *       unverifiable required check rejects rather than approves.</li>
+     *       {@link CheckOutcome#FAILED}, which drives {@link DecisionResult#REJECTED}. An
+     *       unverifiable required check rejects.</li>
      * </ul>
      */
     static Map<SignalConfig, SignalState> applyTimeoutPolicy(Map<SignalConfig, SignalState> signals) {
@@ -202,7 +202,7 @@ public class EnrollmentService {
 
         return switch (state) {
             case SignalState.Pending _ -> switch (signal.classification()) {
-                case REQUIRED ->  new SignalState.Checked(SignalOutcome.FAILED);
+                case REQUIRED ->  new SignalState.Checked(CheckOutcome.FAILED);
                 case BEST_EFFORT, SCORING_SIGNAL -> new SignalState.NotExecuted("timeout");
             };
             case SignalState.Checked _,

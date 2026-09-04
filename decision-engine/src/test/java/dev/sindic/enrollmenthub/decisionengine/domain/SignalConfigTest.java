@@ -72,7 +72,7 @@ class SignalConfigTest {
         void trueWhenAllSignalsAreSettled() {
             var signals = SignalConfig.initializeFor(PaymentType.CREDIT_CARD);
             signals.put(SignalConfig.GEO_SCORE, new SignalState.Scored(RiskLevel.LOW));
-            signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+            signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
             assertThat(SignalConfig.allSettled(signals)).isTrue();
         }
 
@@ -87,7 +87,7 @@ class SignalConfigTest {
         @Test
         void invoiceCompleteWhenFraudSettles() {
             var signals = SignalConfig.initializeFor(PaymentType.INVOICE);
-            signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+            signals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
             assertThat(SignalConfig.allSettled(signals)).isTrue();
         }
 

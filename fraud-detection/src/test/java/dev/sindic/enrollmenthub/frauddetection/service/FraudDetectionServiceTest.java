@@ -5,7 +5,7 @@ import dev.sindic.enrollmenthub.contracts.domain.EnrollmentData;
 import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
 import dev.sindic.enrollmenthub.contracts.events.FraudCheckResult;
-import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
+import dev.sindic.enrollmenthub.contracts.events.CheckOutcome;
 import dev.sindic.enrollmenthub.frauddetection.amqp.FraudCheckResultPublisher;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -31,7 +31,7 @@ class FraudDetectionServiceTest {
         var captor = ArgumentCaptor.forClass(FraudCheckResult.class);
         then(publisher).should().publish(captor.capture());
         assertThat(captor.getValue().enrollmentId()).isEqualTo(data.enrollmentId());
-        assertThat(captor.getValue().outcome()).isEqualTo(SignalOutcome.OK);
+        assertThat(captor.getValue().outcome()).isEqualTo(CheckOutcome.OK);
     }
 
     private static EnrollmentData enrollmentData() {

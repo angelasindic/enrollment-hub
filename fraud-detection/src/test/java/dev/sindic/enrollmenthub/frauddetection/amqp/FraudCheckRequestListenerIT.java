@@ -6,7 +6,7 @@ import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.contracts.domain.Person;
 import dev.sindic.enrollmenthub.contracts.events.FraudCheckRequest;
 import dev.sindic.enrollmenthub.contracts.events.FraudCheckResult;
-import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
+import dev.sindic.enrollmenthub.contracts.events.CheckOutcome;
 import dev.sindic.enrollmenthub.frauddetection.BaseIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Binding;
@@ -56,7 +56,7 @@ class FraudCheckRequestListenerIT extends BaseIntegrationTest {
             var result = (FraudCheckResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
             assertThat(result).isNotNull();
             assertThat(result.enrollmentId()).isEqualTo(enrollmentId);
-            assertThat(result.outcome()).isEqualTo(SignalOutcome.OK);
+            assertThat(result.outcome()).isEqualTo(CheckOutcome.OK);
         });
     }
 

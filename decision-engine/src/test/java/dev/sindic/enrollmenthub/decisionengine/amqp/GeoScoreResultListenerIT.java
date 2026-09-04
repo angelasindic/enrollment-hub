@@ -123,7 +123,7 @@ class GeoScoreResultListenerIT extends BaseIntegrationTest {
                 // Seed FRAUD_CHECK as already-settled via the production write path
                 // (ADR-16 §Write path). The incoming GeoScoreResult then completes the row.
                 var seedSignals = new EnumMap<>(entity.getSignals());
-                seedSignals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+                seedSignals.put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
                 repository.updateSignals(enrollmentId, SignalMapJson.write(jsonMapper, seedSignals));
             });
 

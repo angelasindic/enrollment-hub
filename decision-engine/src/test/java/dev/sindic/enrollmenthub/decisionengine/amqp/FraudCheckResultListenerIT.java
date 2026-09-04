@@ -25,12 +25,12 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-// Shorthand for the contracts SignalOutcome used when constructing FraudCheckResult AMQP events.
-// Assertions against entity.getSignals()...outcome() use the domain SignalOutcome (wildcard import).
+// Shorthand for the contracts CheckOutcome used when constructing FraudCheckResult AMQP events.
+// Assertions against entity.getSignals()...outcome() use the domain CheckOutcome (wildcard import).
 class FraudCheckResultListenerIT extends BaseIntegrationTest {
 
-    private static final dev.sindic.enrollmenthub.contracts.events.SignalOutcome C_OK =
-            dev.sindic.enrollmenthub.contracts.events.SignalOutcome.OK;
+    private static final dev.sindic.enrollmenthub.contracts.events.CheckOutcome C_OK =
+            dev.sindic.enrollmenthub.contracts.events.CheckOutcome.OK;
 
     @Autowired RabbitTemplate rabbitTemplate;
     @Autowired EnrollmentRepository repository;
@@ -44,12 +44,12 @@ class FraudCheckResultListenerIT extends BaseIntegrationTest {
         seedCreditCardRequest(enrollmentId);
 
         rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.FRAUD_CHECK_KEY,
-                new FraudCheckResult(enrollmentId, C_OK));
+                FraudCheckResult.checked(enrollmentId, C_OK));
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var entity = repository.findById(enrollmentId).orElseThrow();
             assertThat(entity.getSignals().get(SignalConfig.FRAUD_CHECK))
-                    .isEqualTo(new SignalState.Checked(SignalOutcome.OK));
+                    .isEqualTo(new SignalState.Checked(CheckOutcome.OK));
         });
     }
 
@@ -58,7 +58,7 @@ class FraudCheckResultListenerIT extends BaseIntegrationTest {
         var unknownId = UUID.randomUUID();
 
         rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.FRAUD_CHECK_KEY,
-                new FraudCheckResult(unknownId, C_OK));
+                FraudCheckResult.checked(unknownId, C_OK));
 
         await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             var dlqMessage = rabbitTemplate.receive(AmqpConfig.FRAUD_CHECK_RESULT_DLQ, 100);
@@ -88,7 +88,7 @@ class FraudCheckResultListenerIT extends BaseIntegrationTest {
             });
 
             rabbitTemplate.convertAndSend(AmqpConfig.CHECK_RESULT_EXCHANGE, AmqpConfig.FRAUD_CHECK_KEY,
-                    new FraudCheckResult(enrollmentId, C_OK));
+                    FraudCheckResult.checked(enrollmentId, C_OK));
 
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
                 var entity = repository.findById(enrollmentId).orElseThrow();

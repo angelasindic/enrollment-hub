@@ -3,7 +3,7 @@ package dev.sindic.enrollmenthub.decisionengine.service;
 import dev.sindic.enrollmenthub.decisionengine.domain.DecisionResult;
 import dev.sindic.enrollmenthub.decisionengine.domain.RiskLevel;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
-import dev.sindic.enrollmenthub.decisionengine.domain.SignalOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
@@ -100,7 +100,7 @@ class EnrollmentServiceTest {
         // GIVEN a CREDIT_CARD entity with FRAUD already settled OK.
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
-        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
         given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(1);
 
@@ -196,7 +196,7 @@ class EnrollmentServiceTest {
         // but if it does happen we must not register a second dispatch.
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
-        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
         given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(0);
 
@@ -214,7 +214,7 @@ class EnrollmentServiceTest {
         // decided correctly. Re-delivery is the relay's job (ADR-17).
         var enrollmentId = UUID.randomUUID();
         var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
-        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(SignalOutcome.OK));
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
         given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
         given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(1);
         doThrow(new RuntimeException("broker down")).when(dispatcher).dispatchNow(enrollmentId);
