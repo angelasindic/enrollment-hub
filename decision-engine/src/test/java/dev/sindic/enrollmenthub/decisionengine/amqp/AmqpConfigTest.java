@@ -1,5 +1,9 @@
 package dev.sindic.enrollmenthub.decisionengine.amqp;
 
+import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalConfig;
+import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
+import dev.sindic.enrollmenthub.decisionengine.service.SignalShapeMismatchException;
 import dev.sindic.enrollmenthub.decisionengine.service.UnknownCorrelationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.AmqpException;
@@ -51,6 +55,17 @@ class AmqpConfigTest {
                 new IllegalArgumentException("set exactly one of riskLevel and noResultReason"));
 
         assertThat(policy.shouldRetry(wrapped)).isFalse();
+    }
+
+    @Test
+    void listenerRetryPolicy_doesNotRetryASignalShapeMismatch() {
+        // A wiring fault between a signal's classification and its listener, not a message fault —
+        // every message for that signal fails identically until one of the two changes.
+        var policy = AmqpConfig.listenerRetryPolicy();
+
+        assertThat(policy.shouldRetry(new SignalShapeMismatchException(
+                SignalConfig.GEO_SCORE, new SignalState.Checked(CheckOutcome.FAILED))))
+                .isFalse();
     }
 
     @Test

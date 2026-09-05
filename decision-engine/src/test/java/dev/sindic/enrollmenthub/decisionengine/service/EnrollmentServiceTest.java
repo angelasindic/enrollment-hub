@@ -71,6 +71,36 @@ class EnrollmentServiceTest {
     }
 
     @Test
+    void recordSignalResult_mismatchedShape_rejectedWithoutTouchingTheRow() {
+        // GEO_SCORE is SCORING_SIGNAL, so a check-style verdict is not a state it can hold.
+        // Aggregation would match no branch for it and the signal would count for nothing.
+        assertThatThrownBy(() -> service.recordSignalResult(
+                UUID.randomUUID(), SignalConfig.GEO_SCORE, new SignalState.Checked(CheckOutcome.FAILED)))
+                .isInstanceOf(SignalShapeMismatchException.class)
+                .hasMessageContaining("GEO_SCORE")
+                .hasMessageContaining("SCORING_SIGNAL");
+
+        // The row is not what is wrong, so it is never read or locked.
+        then(repository).should(never()).findByEnrollmentIdForUpdate(any());
+        then(repository).should(never()).updateSignals(any(), any());
+    }
+
+    @Test
+    void recordSignalResult_resultlessStatesAreAdmittedByAnySignal() {
+        // NotExecuted comes from the timeout policy and applies to every classification; the guard
+        // must not reject the states that say a signal produced nothing.
+        var enrollmentId = UUID.randomUUID();
+        var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
+        given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
+        given(repository.updateSignals(eq(enrollmentId), anyString())).willReturn(1);
+
+        service.recordSignalResult(
+                enrollmentId, SignalConfig.GEO_SCORE, new SignalState.NotExecuted("timeout"));
+
+        then(repository).should().updateSignals(eq(enrollmentId), anyString());
+    }
+
+    @Test
     void recordSignalResult_writesJsonSignalsViaExplicitUpdate_whenNotComplete() {
         // GIVEN a CREDIT_CARD entity in initial PENDING/PENDING state.
         var enrollmentId = UUID.randomUUID();

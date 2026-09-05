@@ -1,5 +1,6 @@
 package dev.sindic.enrollmenthub.decisionengine.amqp;
 
+import dev.sindic.enrollmenthub.decisionengine.service.SignalShapeMismatchException;
 import dev.sindic.enrollmenthub.decisionengine.service.UnknownCorrelationException;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -272,12 +273,14 @@ public class AmqpConfig {
 
     /**
      * Exponential backoff over {@link #MAX_RETRIES} attempts for {@code @RabbitListener}
-     * invocations, excluding the two failures a redelivery cannot fix:
+     * invocations, excluding the three failures a redelivery cannot fix:
      * {@link UnknownCorrelationException} (a result for an {@code enrollmentId} with no correlation
-     * row) and {@link MessageConversionException} (bytes that are not a valid message of the
-     * expected type — a contract's own constructor rejecting them surfaces here, wrapped). Both go
-     * to the DLQ on the first throw, surfacing the inconsistency for triage instead of spending the
-     * retry budget. Package-private for focused unit tests.
+     * row), {@link MessageConversionException} (bytes that are not a valid message of the expected
+     * type — a contract's own constructor rejecting them surfaces here, wrapped), and
+     * {@link SignalShapeMismatchException} (a signal reporting a state its classification cannot
+     * use, which is a wiring fault rather than a message fault). All three go to the DLQ on the
+     * first throw, surfacing the inconsistency for triage instead of spending the retry budget.
+     * Package-private for focused unit tests.
      */
     static RetryPolicy listenerRetryPolicy() {
         return RetryPolicy.builder()
@@ -285,7 +288,9 @@ public class AmqpConfig {
                 .delay(Duration.ofMillis(INITIAL_INTERVAL))
                 .multiplier(MULTIPLIER)
                 .maxDelay(Duration.ofMillis(MAX_INTERVAL))
-                .excludes(UnknownCorrelationException.class, MessageConversionException.class)
+                .excludes(UnknownCorrelationException.class,
+                          MessageConversionException.class,
+                          SignalShapeMismatchException.class)
                 .build();
     }
 }
