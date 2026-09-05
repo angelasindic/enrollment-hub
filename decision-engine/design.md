@@ -88,7 +88,7 @@ server-side per request, so a client retry after a lost `202` yields a distinct 
 
 This sequence implements the **Idempotent Consumer pattern** with an explicit completion marker.
 Because an unacknowledged message on the intake queue serves as the system-of-record cursor for
-active work-in-flight, it side-steps the overhead of a separate engine-side ingress outbox table:
+work still in progress, it side-steps the overhead of a separate engine-side ingress outbox table:
 the correlation record itself carries the ledger state.
 
 When a downstream command publish fails post-commit, the exception escaping to the Spring AMQP
@@ -374,12 +374,11 @@ replacement and persists it by explicit `UPDATE` (ADR-16 §Write path).
 
 | Type                       | Role                                                                                                 |
 |----------------------------|------------------------------------------------------------------------------------------------------|
-| `SignalProcessingState`    | Lifecycle: `PENDING`, `SETTLED`, `FAILED` (timeout or crash)                                         |
-| `SignalOutcome`            | Check-style result: `OK`, `FAILED`, `NO_RESULT` (used by `BEST_EFFORT` / `REQUIRED` signals)         |
+| `CheckOutcome`             | Check-style verdict: `OK`, `FAILED` (used by `BEST_EFFORT` / `REQUIRED` signals)                     |
 | `RiskLevel`                | Score-style result: `LOW`, `MEDIUM`, `HIGH`, `EXTREME` (used by `SCORING_SIGNAL` signals)            |
 | `GateClassification`       | Aggregation metadata: `REQUIRED`, `BEST_EFFORT`, `SCORING_SIGNAL` (ADR-14)                          |
 | `SignalConfig`             | Enum of signals — declares applicable routes + classification (`GEO_SCORE`, `FRAUD_CHECK`)           |
-| `SignalState`              | Flat record: `(processingState, outcome, riskLevel, reason)` — serialises trivially to JSONB         |
+| `SignalState`              | Sealed hierarchy: `Pending`, `Checked`, `Scored`, `NoResult`, `NotExecuted` — tagged JSONB (ADR-14)  |
 | `DecisionResult`           | Domain decision: `APPROVED`, `REJECTED`, `CONDITIONAL_APPROVED`                                      |
 | `EnrollmentDecisionResult` | Wrapper carrying the `DecisionResult` returned from the engine                                       |
 
@@ -436,9 +435,9 @@ flowchart TD
 ```
 
 **Completion predicate:** `SignalConfig.allSettled(signals)` returns `true` when every
-signal present in the map has settled (`processingState ≠ PENDING`). Signals not present
-in the map are by definition not applicable to the route and contribute nothing to the
-predicate. `EnrollmentEntity.isComplete()` delegates to it.
+signal present in the map has reached a terminal state — anything other than `Pending`,
+including `NotExecuted`. Signals not present in the map are by definition not applicable
+to the route and contribute nothing to the predicate.
 
 **Signal-map transitions.** The map is the unit of state, and every transition replaces it
 wholesale rather than mutating it in place (ADR-16 §Write path). The transitions are applied
@@ -446,28 +445,31 @@ by the service layer on the entity's map:
 
 | Transition                                | Applied by                                  | Effect                                                                                                                          |
 |-------------------------------------------|---------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| `SignalConfig.initializeFor(paymentType)` | `EnrollmentEntity.create(...)` at intake    | Seeds the map with every applicable signal `PENDING`                                                                            |
+| `SignalConfig.initializeFor(paymentType)` | `EnrollmentEntity.create(...)` at intake    | Seeds the map with every applicable signal `Pending`                                                                            |
 | copy-and-replace on the arriving signal   | `EnrollmentService.recordSignalResult`      | Records the result in a copy of the map; the copy is serialised and persisted by explicit `UPDATE`                              |
-| `applyTimeoutPolicy(signals)`             | `EnrollmentService.processExpiredTimeouts` (ADR-15) | Per classification: `REQUIRED` settles with outcome `FAILED` (fail-closed); `BEST_EFFORT` / `SCORING_SIGNAL` become `FAILED` (fail-open). Terminal signals unchanged |
-| `SignalConfig.allSettled(signals)`        | After any transition                        | True when every applicable signal has settled (`processingState ≠ PENDING`)                                                     |
+| `applyTimeoutPolicy(signals)`             | `EnrollmentService.processExpiredTimeouts` (ADR-15) | Per classification: `REQUIRED` becomes `Checked(FAILED)` (fail-closed); `BEST_EFFORT` / `SCORING_SIGNAL` become `NotExecuted(reason)` (fail-open). Terminal signals unchanged |
+| `SignalConfig.allSettled(signals)`        | After any transition                        | True when every applicable signal has reached a terminal state (anything but `Pending`)                                          |
 
 **Design decisions:**
 
-- **Two flat result fields per signal.** `SignalState` carries both `outcome` and
-  `riskLevel`; exactly one is populated per classification (check-style fills
-  `outcome`, score-style fills `riskLevel`). Trade-off documented in ADR-14:
-  preferred over a sealed type hierarchy for trivial JSONB serialisation.
+- **One variant per way a signal can end.** `SignalState` is a sealed hierarchy —
+  `Pending`, `Checked`, `Scored`, `NoResult`, `NotExecuted` — each carrying only the data
+  it has, and each requiring it. Aggregation and the event mapper match on it
+  exhaustively, so a sixth variant stops them compiling. ADR-14 records the trade-off
+  this reversed and what it costs: the domain type is also the persisted format, so the
+  JSONB column carries a `kind` discriminator and every hand-written serialisation of the
+  map must supply the declared value type (`SignalMapJson`).
 - **Absence over sentinel.** Inapplicable signals are missing from the map; there
-  is no `NOT_APPLICABLE` enum value. `NO_RESULT` outcomes and null `riskLevel`
-  represent "settled but no value" — no `NOT_AVAILABLE` sentinel on the result
-  enums.
+  is no `NOT_APPLICABLE` variant. "Ran without a value" is `NoResult`, which a
+  score-style signal can use too — something a check-style enum constant never could.
 - **Whole-map replacement over in-place mutation.** A transition builds a new signal
   map and persists it by explicit `UPDATE`; the JSONB column is never dirty-tracked.
   ADR-16 §Write path covers the failure mode this avoids.
-- **Compatibility with contracts module.** Domain result enums (`SignalOutcome`,
-  `RiskLevel`, `DecisionResult`) are a subset of the contracts enums. The contract
-  enums may carry additional values that the decision-engine domain does not need.
-  `EnumCompatibilityTest` asserts the subset relationship (ADR-06).
+- **Compatibility with contracts module.** Domain result enums (`CheckOutcome`,
+  `RiskLevel`, `DecisionResult`) are a subset of the contracts enums, which may carry
+  values the domain does not need. `CheckOutcome` crosses twice — inbound from a worker's
+  `CheckOutcome`, outbound onto the published `SignalOutcome` — and
+  `EnumCompatibilityTest` asserts both (ADR-06 §An enum is a contract too).
 - **Extensibility.** Adding a new signal requires (1) declaring a new `SignalConfig`
   value with its applicable routes and `GateClassification`, (2) a request builder and
   request queue so the decision engine dispatches its command, (3) a result listener
@@ -478,7 +480,7 @@ by the service layer on the entity's map:
 **Event contracts** are defined as Java records in the shared `enrollment-hub:contracts`
 module (ADR-06). The canonical field definitions for the per-signal request commands
 (`GeoScoreRequest`, `FraudCheckRequest`), the result events (`GeoScoreResult`,
-`FraudCheckResult`), and `EnrollmentDecisionEvent` live in that module. The `SignalProcessingState`, `SignalConfig`, and `GateClassification` types
+`FraudCheckResult`), and `EnrollmentDecisionEvent` live in that module. The `SignalState`, `SignalConfig`, and `GateClassification` types
 are decision-engine-internal and not part of the shared contract. `EnrollmentRequest`
 is also decision-engine-internal — it flows only between the REST endpoint and
 `EnrollmentIntakeListener` and is not consumed by any other service.
@@ -493,11 +495,11 @@ contracts `EnrollmentDecisionEvent` and publishes it to `enrollment.decisions`.
 **The engine is route-agnostic.** It iterates the signal map and dispatches on each
 signal's `GateClassification`, accumulating two booleans:
 
-| `GateClassification` | Trigger condition (state must be `SETTLED`) | Accumulator             |
-|----------------------|---------------------------------------------|-------------------------|
-| `BEST_EFFORT`        | `outcome == FAILED`                         | `rejected = true`       |
-| `REQUIRED`           | `outcome == FAILED`                         | `rejected = true`       |
-| `SCORING_SIGNAL`     | `riskLevel ∈ {HIGH, EXTREME}`               | `reviewRequired = true` |
+| `GateClassification` | Trigger condition                             | Accumulator             |
+|----------------------|-----------------------------------------------|-------------------------|
+| `BEST_EFFORT`        | `Checked(FAILED)`                             | `rejected = true`       |
+| `REQUIRED`           | `Checked(FAILED)`                             | `rejected = true`       |
+| `SCORING_SIGNAL`     | `Scored(HIGH)` or `Scored(EXTREME)`           | `reviewRequired = true` |
 
 Resolution after the loop, in priority order:
 
@@ -505,9 +507,10 @@ Resolution after the loop, in priority order:
 2. else `reviewRequired` → `CONDITIONAL_APPROVED`
 3. else → `APPROVED`
 
-**Fail-open by omission.** A `FAILED` processing state (timeout or crash) and a
-SETTLED no-result (e.g. geocoding failure, `NO_RESULT` outcome, null `riskLevel`)
-contribute nothing to either accumulator. No explicit fail-open branch is needed.
+**Fail-open by omission.** `NotExecuted` (no reply before the deadline) and `NoResult`
+(ran, produced no value — a geocoding failure, say) match no trigger condition, so they
+contribute nothing to either accumulator and need no branch of their own. The variant a
+branch does not name is the variant it ignores.
 
 **Asymmetric guarantee** (ADR-14): `SCORING_SIGNAL` signals cannot drive
 `REJECTED`. Enforced by control flow — the scoring branch can only set
@@ -517,22 +520,22 @@ visible edit to that branch.
 
 **`REQUIRED` classification** has no current assignment. It is reserved for future
 fail-closed signals (e.g. sanctions screening, regulated KYC). On timeout these fail
-*closed* rather than open: `applyTimeoutPolicy` (ADR-15) settles a still-`PENDING`
-`REQUIRED` signal with outcome `FAILED` instead of marking it `FAILED` processing
-state, so aggregation sees an explicit `FAILED` outcome and drives `REJECTED`. A
+*closed* rather than open: `applyTimeoutPolicy` (ADR-15) settles a still-`Pending`
+`REQUIRED` signal as `Checked(FAILED)` rather than `NotExecuted`, so aggregation sees an
+explicit failed verdict and drives `REJECTED`. A
 missing required check rejects; a missing `BEST_EFFORT`/`SCORING_SIGNAL` check fails
 open.
 
 **Guards:**
 
-- `evaluate()` throws `IllegalStateException` if `isComplete()` returns `false` —
-  the engine must never be called on an in-flight record.
-- The aggregation loop throws `AggregationPreconditionException` if it encounters a
-  `PENDING` signal — that would indicate a bug in the completion predicate.
+- The aggregation loop throws `AggregationPreconditionException` (an
+  `IllegalStateException`) if it encounters a `Pending` signal — the engine must never be
+  called on an enrollment whose signals have not all settled, and reaching one means the
+  caller's completion predicate fired early.
 
-**Pure function.** No state, no side effects. The service layer calls `evaluate()`
-after `isComplete()` returns true, then maps `EnrollmentDecisionResult` and the
-settled signal map into the contracts `EnrollmentDecisionEvent` for publishing.
+**Pure function.** No state, no side effects. The service layer calls `evaluate()` once
+`SignalConfig.allSettled` holds, then maps `EnrollmentDecisionResult` and the settled
+signal map into the contracts `EnrollmentDecisionEvent` for publishing.
 
 ### Decision outbox and dispatch relay
 

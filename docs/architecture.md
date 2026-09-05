@@ -94,7 +94,7 @@ The drivers in §1 specify what the system must achieve, while the following con
 
 **Local-first deployment.** The whole system must run on a single local machine in containers, which rules out managed cloud services and forces portable open-source components — PostgreSQL, RabbitMQ, Redis.
 
-**Current Java runtime.** The project commits to JDK 25, which constrains the concurrency model to virtual threads (Project Loom) — well suited to the I/O-bound scatter-gather, avoiding one platform thread per in-flight request.
+**Current Java runtime.** The project commits to JDK 25, which constrains the concurrency model to virtual threads (Project Loom) — well suited to the I/O-bound scatter-gather, avoiding one platform thread per concurrent request.
 
 **Transient storage only.** Scoring runs statelessly: no fraud evidence is written to local disk, and any data needed for correlation or aggregation is held only in transient, TTL-bound remote storage.
 
@@ -182,7 +182,7 @@ The catalog comprises the intake event, the per-signal scatter-gather commands a
 | `GeoScoreRequest`         | decision-engine → geo-scoring     | the shipping address only                                                                 |
 | `GeoScoreResult`          | geo-scoring → decision-engine     | a `RiskLevel`, or none with a reason when geocoding fails                                 |
 | `FraudCheckRequest`       | decision-engine → fraud-detection | the full enrollment data                                                                  |
-| `FraudCheckResult`        | fraud-detection → decision-engine | a `SignalOutcome`                                                                         |
+| `FraudCheckResult`        | fraud-detection → decision-engine | a `CheckOutcome`, with a reason when it reached no verdict                                 |
 | `EnrollmentDecisionEvent` | decision-engine → Account Service | a fresh `decisionId`, the original request, the `DecisionResult`, and the settled signals |
 
 Payload designs follow the principle of least privilege. Each check receives only the fields it needs, and the outbound decision exposes a fresh `decisionId` while withholding the internal correlation key. Whether a signal reports a `RiskLevel` or a `SignalOutcome` follows the classification in ADR-14.
@@ -226,7 +226,7 @@ In the current build, this component is a functional stub that unconditionally a
 
 ### 6.1 The CREDIT_CARD Happy Path
 
-The Decision Engine dispatches Geo-Scoring and Fraud-Detection checks concurrently, aggregating their asynchronous results as either a scored outcome or a graceful fail-open signal. For example, a geocoding failure yields an empty RiskLevel that the engine absorbs as a fail-open condition (§6.3). Once all available signals are settled, the engine applies its evaluation logic; within this flow, Geo-Scoring can only elevate a risk tier for manual review and never independently drive a rejection (§8.6).
+The Decision Engine dispatches Geo-Scoring and Fraud-Detection checks concurrently, aggregating their asynchronous results as either a scored outcome or a graceful fail-open signal. For example, a geocoding failure yields no risk level and a reason, which the engine records as a no-result and absorbs as a fail-open condition (§6.3). Once every applicable signal has reached a terminal state, the engine applies its evaluation logic; within this flow, Geo-Scoring can only elevate a risk tier for manual review and never independently drive a rejection (§8.6).
 
 ```mermaid
 sequenceDiagram
@@ -268,7 +268,7 @@ The applicable-signal set is defined statically within the configuration, which 
 
 ### 6.3 Timeout and Fail-Open
 
-A detection service can fail independently — an outage, a slow dependency, a Redis partition. When a correlation record's timeout deadline is reached with one or more signals still `PENDING`, the timeout poller (ADR-15) advances those slots to `FAILED`. The completion predicate then holds — every applicable signal is terminal — and aggregation runs on whatever settled before the deadline.
+A detection service can fail independently — an outage, a slow dependency, a Redis partition. When a correlation record's timeout deadline is reached with one or more signals still pending, the timeout poller (ADR-15) settles those slots as never-executed — or, for a `REQUIRED` signal, as an explicit failed verdict. The completion predicate then holds — every applicable signal is terminal — and aggregation runs on whatever answered before the deadline.
 
 The aggregation carries no per-signal conditional logic for this case. It dispatches on the gate classification (ADR-14):
 
@@ -280,7 +280,7 @@ The aggregation carries no per-signal conditional logic for this case. It dispat
 
 The decision is computed and recorded on the correlation record once all applicable signals are terminal — by whichever path completes the row, the result handler or the timeout poller running the same finalize step (ADR-17) — and a dispatch relay publishes the `EnrollmentDecisionEvent` out of band. No currently assigned signal holds the decision open beyond the deadline in ADR-15.
 
-**Fail-open annotation.** A fail-open decision carries the normal outcome (`APPROVED` or `CONDITIONAL_APPROVED`) determined by the signals that settled, annotated with the reason code `APPROVED_SCORE_MISSING` and flagged for operational review. Internally the missing geo-signal is recorded as a null risk level; `APPROVED_SCORE_MISSING` is the externally emitted reason code — the same fact, internal state versus emitted annotation.
+**Fail-open annotation.** A fail-open decision carries the normal outcome (`APPROVED` or `CONDITIONAL_APPROVED`) determined by the signals that answered. The missing signal is published with its own account of why: `NOT_EXECUTED` with a reason when no reply arrived before the deadline, or no outcome and a reason when the service ran and could not produce a value. A consumer or an operator can therefore distinguish the two from the signal itself, without a separate annotation on the decision.
 
 **Late-arriving results.** A result that arrives after the decision is recorded finds its correlation slot in a non-`PENDING` terminal state, and the idempotency guard (ADR-16) discards it without modifying the record. Whether a discarded late result should raise a `LateScoreArrived` event, flag the record, or remain visible only via the dead-letter queue is an open decision.
 
@@ -336,9 +336,9 @@ failover transparently, so moving from local to production requires no applicati
 
 | Component | Local | Production expectation | Failure mode if local posture deployed |
 |---|---|---|---|
-| PostgreSQL (correlation store) | Single instance | Managed Postgres with synchronous replica + PITR backups | All in-flight enrollments lost; idempotency guard cannot recover state from the broker alone |
+| PostgreSQL (correlation store) | Single instance | Managed Postgres with synchronous replica + PITR backups | All undecided enrollments lost; idempotency guard cannot recover state from the broker alone |
 | RabbitMQ (event bus) | Single broker | Managed cluster with quorum queues; mirrored DLX | In-flight messages lost on broker failure; Publisher Confirms (ADR-13) detect this and trigger retry, but the publishing process must survive the broker outage |
-| Redis (geo-index + geocoding) | Single instance | Managed Redis with replica + persistence (RDB + AOF) | 48h of geo-index lost; geo-scoring settles without a score → fail-open (`APPROVED_SCORE_MISSING`); no enrollment lost |
+| Redis (geo-index + geocoding) | Single instance | Managed Redis with replica + persistence (RDB + AOF) | 48h of geo-index lost; geo-scoring settles without a score → fail-open, published as a signal with no outcome and a reason; no enrollment lost |
 
 ---
 
@@ -448,7 +448,7 @@ The full model — the aggregation algorithm, the per-category result types, how
 
 ### 8.7 Entry-Point Durability and Causal Ordering
 
-The enrollment entry point faces a dual-write: a correlation record must be inserted into PostgreSQL and the downstream check commands dispatched to RabbitMQ. Because no transaction spans both systems, a crash between the two leaves an inconsistent state, and the direction of the gap determines the symptom. If the publish precedes the database commit, the broker may deliver a command to a fast check service before the in-flight `INSERT` is visible under PostgreSQL's read-committed isolation; the result handler finds no correlation row and silently drops the result. If the publish follows the commit, a crash before the publish completes produces an orphan record — acknowledged to the applicant, known to the database, but never dispatched to the check services.
+The enrollment entry point faces a dual-write: a correlation record must be inserted into PostgreSQL and the downstream check commands dispatched to RabbitMQ. Because no transaction spans both systems, a crash between the two leaves an inconsistent state, and the direction of the gap determines the symptom. If the publish precedes the database commit, the broker may deliver a command to a fast check service before the uncommitted `INSERT` is visible under PostgreSQL's read-committed isolation; the result handler finds no correlation row and silently drops the result. If the publish follows the commit, a crash before the publish completes produces an orphan record — acknowledged to the applicant, known to the database, but never dispatched to the check services.
 
 Three solution shapes were evaluated. A **transactional outbox** writes the correlation record and an outbox row in one transaction and relays the outbox to the broker — correct, but it adds an outbox table, a relay, and polling-latency monitoring. A **post-commit synchronization hook** defers the publish to after the commit, closing the publish-beats-commit race but leaving the orphan-record window open: the hook runs in process memory, so a crash between commit and hook loses the event with no broker redelivery. The third **inverts the write order**: the REST endpoint publishes a durable intake message to a point-to-point queue and does nothing else; a single decision-engine consumer drives the rest.
 

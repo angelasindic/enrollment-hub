@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Guards against silent drift between the decision-engine domain enums and the enums of the two
  * channels either side of them: the {@code contracts} module (messaging) and the {@code api}
- * request records (REST). Each channel declares its own vocabulary (ADR-06 §One channel, one
+ * request records (REST). Each channel declares its own types (ADR-06 §One channel, one
  * contract), so nothing but these assertions keeps the three in step.
  */
 class EnumCompatibilityTest {

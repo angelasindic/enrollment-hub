@@ -13,7 +13,7 @@ import java.util.List;
  * <p>That includes {@link PaymentTypeDto}. Binding the {@code contracts} enum here would make the
  * published event part of the HTTP contract; binding the domain enum would let an internal rename
  * change the JSON this endpoint accepts. Neither is a dependency a public API should carry, so the
- * accepted vocabulary is declared here and {@code EnumCompatibilityTest} pins it to the domain enum
+ * accepted values are declared here and {@code EnumCompatibilityTest} pins them to the domain enum
  * the controller converts into.
  */
 public record EnrollmentRequest(

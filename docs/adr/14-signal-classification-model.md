@@ -22,19 +22,21 @@ Every signal carries a classification as metadata, and the aggregation dispatche
 
 ### Classifications
 
-Three classifications cover the meaningful combinations of the two orthogonal properties, missing-signal behaviour and authority over the outcome:
+Three classifications cover the meaningful combinations of missing-signal behaviour and authority over the outcome. A third property rides along with them — the shape of the result a signal produces — and is stated here rather than left implicit, because aggregation dispatches on the classification and then reads the field that shape implies:
 
-| Classification   | Missing-signal behaviour                   | Authority over outcome                                 |
-|------------------|--------------------------------------------|--------------------------------------------------------|
-| `REQUIRED`       | Blocks completion; escalation via ADR-15   | Authoritative — can drive any outcome                  |
-| `BEST_EFFORT`    | Fail-open; aggregation proceeds without it | Authoritative — can drive any outcome                  |
-| `SCORING_SIGNAL` | Fail-open; aggregation proceeds without it | Advisory — can flag for review, cannot drive rejection |
+| Classification   | Missing-signal behaviour                   | Authority over outcome                                 | Result shape                    |
+|------------------|--------------------------------------------|--------------------------------------------------------|---------------------------------|
+| `REQUIRED`       | Blocks completion; escalation via ADR-15   | Authoritative — can drive any outcome                  | Check-style — a `CheckOutcome`  |
+| `BEST_EFFORT`    | Fail-open; aggregation proceeds without it | Authoritative — can drive any outcome                  | Check-style — a `CheckOutcome`  |
+| `SCORING_SIGNAL` | Fail-open; aggregation proceeds without it | Advisory — can flag for review, cannot drive rejection | Score-style — a `RiskLevel`     |
+
+Result shape is not independently configurable. Reclassifying a signal without changing what its worker reports leaves the aggregation branch reading a field the state does not carry, and the signal contributes nothing — silently, since no branch matches. The pairing is currently held by there being one listener per signal, which is a convention rather than a constraint.
 
 The fourth logical combination, advisory and blocking on missing, is incoherent: a signal that cannot drive an outcome but holds the decision until it responds contradicts its own definition. The taxonomy is complete with three values.
 
 ### Aggregation
 
-Once every applicable signal has settled or failed, the engine aggregates on classification. Anauthoritative signal (`REQUIRED` or `BEST_EFFORT`) that explicitly failed drives rejection. An advisory signal (`SCORING_SIGNAL`) at elevated or extreme risk flags for conditional approval and nothing more. A signal that timed out or returned no result contributes nothing, so fail-open is expressed by omission rather than by an explicit branch. The accumulator and resolution-order mechanics live in `decision-engine/design.md §Decision Engine`; settling a missing `REQUIRED` signal as failed on timeout is ADR-15.
+Once every applicable signal has settled or failed, the engine aggregates on classification. Anauthoritative signal (`REQUIRED` or `BEST_EFFORT`) that explicitly failed drives rejection. An advisory signal (`SCORING_SIGNAL`) at elevated or extreme risk flags for conditional approval and nothing more. A signal that never answered or returned no result contributes nothing, so fail-open is expressed by omission in the aggregation itself; the timeout transition that produces those states is an explicit branch (ADR-15). The accumulator and resolution-order mechanics live in `decision-engine/design.md §Decision Engine`; settling a missing `REQUIRED` signal as failed on timeout is ADR-15.
 
 ### Asymmetric aggregation guarantee
 
@@ -51,7 +53,7 @@ This is the property the Geo-Scoring Business Analysis relies on: a misconfigure
 **Costs.**
 
 - `REQUIRED` has no current assignment. It is named in advance so that introducing the first fail-closed signal (sanctions screening, regulated KYC) does not touch every aggregation dispatch site.
-- A signal state carries one result field per category, of which only one is meaningful per entry. A caller that reads the wrong field gets a silent null rather than a compile error. This is accepted over the complexity of a sealed type hierarchy for a two-signal system.
+- Signal state is a sealed hierarchy — one variant per way a signal can end, each carrying only the data it has — rather than one record with a field per result category. The flat form was accepted first and reversed: its fields were independently nullable, so a caller reading the wrong one got a silent null, and the combination "never ran" was indistinguishable from "ran without a value" at the point where the decision is published. The price is that the domain type is also the persisted format, so the JSONB column inherits the polymorphism and every hand-written serialisation of the signal map must supply the declared value type or the discriminator is silently omitted.
 - The model distinguishes a service that did not respond from one that responded without a result. Each signal service must emit a settled no-result when it runs and cannot produce a value, rather than letting the timeout poller mark it failed. The distinction is meaningful for audit and incident analysis.
 
 ---

@@ -32,7 +32,7 @@ import static org.mockito.Mockito.doThrow;
 
 /**
  * Drives the geo-scoring listener over a real broker. The request queue and its DLX/DLQ are owned
- * by the decision-engine in production (ADR-13 §Channel ownership); since the decision-engine is
+ * by the decision-engine in production (ADR-13 §Channel Ownership); since the decision-engine is
  * not present in this isolated context, {@link RequestTopology} declares that topology plus a
  * capture queue bound to the result exchange.
  */

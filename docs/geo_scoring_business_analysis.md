@@ -202,8 +202,8 @@ still make sense is exactly what the planning cycle decides if the monitoring tr
 
 Geo-Scoring is meant to augment the existing fraud layer, not gate it. If the Geo-Scoring service is down for any
 reason (a geocoding API outage, a Redis partition, scoring-service degradation), the hub carries on with the existing
-fraud signal alone and emits the decision with an `APPROVED_SCORE_MISSING` reason code. Enrollments decided without a
-geo-score get flagged for cluster-level review, not rejected. 
+fraud signal alone, and the published decision carries the geo-signal with no outcome and a reason saying why it has
+none. Enrollments decided without a geo-score get flagged for cluster-level review, not rejected. 
 
 The point of failing open is that a new detection layer shouldn't become a new single point of failure. The Architecture
 Document covers the implementation and the fail-open timeout policy in §6.4.

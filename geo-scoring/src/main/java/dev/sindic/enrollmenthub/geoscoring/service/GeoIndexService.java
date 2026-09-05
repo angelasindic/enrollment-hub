@@ -150,9 +150,9 @@ public class GeoIndexService {
 
     /**
      * Assembles a {@link GeoScoreResult} event for the case where geocoding failed
-     * and no density check could be performed. The null {@code riskLevel} signals a
-     * no-result condition; the decision-engine maps this to a SETTLED + no-result signal
-     * state (fail-open). No entry is added to the geo-index.
+     * and no density check could be performed. The null {@code riskLevel} plus a reason is the
+     * contract's no-result form — distinct from a signal that never answered — and the
+     * decision-engine fails it open. No entry is added to the geo-index.
      */
     public GeoScoreResult toNotAvailableEvent(UUID enrollmentId) {
         return new GeoScoreResult(

@@ -38,7 +38,7 @@ flowchart TD
 
 **Consumes:** `GeoScoreRequest` commands delivered to the durable queue `geo.scoring.requests.queue`, which the
 decision engine declares and binds to the `enrollment.check.request` direct exchange with routing key `geo.score`
-(ADR-13 §Channel ownership). Geo-scoring is dispatched only on the credit-card route — the decision engine derives this
+(ADR-13 §Channel Ownership). Geo-scoring is dispatched only on the credit-card route — the decision engine derives this
 from `SignalConfig` and never sends `geo.score` for invoice enrollments. The command carries a least-privilege payload:
 only the shipping address and the correlation `enrollmentId`, no other enrollment data. The listener
 (`GeoScoreRequestListener`) reads them directly.
@@ -232,8 +232,8 @@ risk level becomes a candidate. The overall risk level is resolved as follows (s
    failure), the density check does not run and the event is emitted with `riskLevel = null`,
    `noResultReason = "geocoding_failed"`, empty `neighborCounts`, empty `triggeredThresholds`, and `null`
    coordinates. No entry is added to the geo-index — the index only contains enrollments with trustworthy
-   coordinates. The decision engine maps a null `riskLevel` to a `SETTLED + NO_RESULT` signal state and proceeds
-   fail-open (ADR-15).
+   coordinates. The decision engine records this as a no-result signal state — distinct from a signal that never
+   answered — and proceeds fail-open (ADR-15).
 
 Default v0 mapping:
 
@@ -304,7 +304,7 @@ normally. On exception, the stateless retry interceptor configured in `AmqpConfi
 exponential backoff (1 s → 2 s → 4 s, capped at 10 s). After exhaustion, `RejectAndDontRequeueRecoverer` rejects
 the message; the broker routes it to the request queue's dead-letter exchange `geo.scoring.requests.dlx` and queue
 `geo.scoring.requests.queue.dlq` for operator inspection. The request queue and its dead-letter queue are owned by the
-decision-engine (ADR-13 §Channel ownership); active monitoring on `rabbitmq.dlq.depth` is the primary signal.
+decision-engine (ADR-13 §Channel Ownership); active monitoring on `rabbitmq.dlq.depth` is the primary signal.
 
 #### Listener Concurrency
 

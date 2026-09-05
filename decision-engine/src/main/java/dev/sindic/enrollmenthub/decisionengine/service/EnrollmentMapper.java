@@ -12,7 +12,7 @@ import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
  *
  * <p>There is no inbound aggregate mapper. The intake message is the decision-engine's own
  * (ADR-13 §Ingress Inversion): it publishes {@code EnrollmentEvent} and consumes it again, so the
- * payload arrives in the vocabulary it left in. Rebuilding {@link EnrollmentCommand} from it would
+ * payload arrives in the form it left in. Rebuilding {@link EnrollmentCommand} from it would
  * protect against nothing, because no domain logic runs on it — the consume path reads only
  * {@code paymentType}, and only to pick the applicable signals. The contracts boundary that does
  * need a translation is the signal results, which become {@code SignalState} (ADR-06, ADR-14).
