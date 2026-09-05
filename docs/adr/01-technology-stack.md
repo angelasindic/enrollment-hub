@@ -16,7 +16,7 @@ Four stack choices: implementation language, message broker, Redis client for ge
 
 **Redis client — Lettuce.** The Spring Boot default (via Spring Data Redis), fully featured (`GEOADD`/`GEOSEARCH`), used in blocking mode under virtual threads. Geo operations run as Lua scripts to keep the density check and index write atomic. Jedis is simpler but blocking-I/O only; no capability gap with Lettuce.
 
-**Correlation state — PostgreSQL.** The scatter-gather correlation record needs atomic check-and-update in a single transaction; Postgres ACID makes that trivial, where Redis would need Lua that grows complex as parallel checks increase. The table is tiny — one row per in-flight request.
+**Correlation state — PostgreSQL.** The scatter-gather correlation record needs atomic check-and-update in a single transaction; Postgres ACID makes that trivial, where Redis would need Lua that grows complex as parallel checks increase. The table is tiny — one row per undecided enrollment.
 
 The Spring web model (MVC servlet, not WebFlux) is decided in ADR-04, alongside the virtual-threads choice that motivates it; it is noted here only to complete the stack inventory.
 

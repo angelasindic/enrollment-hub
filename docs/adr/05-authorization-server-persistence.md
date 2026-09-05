@@ -6,9 +6,9 @@
 
 ## Context
 
-The authorization-server is the enrollment-hub identity provider and issues the tokens consumed by ADR-03 Layer 2. Its durable state, which comprises refresh tokens, in-flight authorization codes, and recorded consent, is operationally critical. Spring Authorization Server (SAS) defaults to in-memory implementations for this state, which is unsuitable for production for two reasons. 
+The authorization-server is the enrollment-hub identity provider and issues the tokens consumed by ADR-03 Layer 2. Its durable state, which comprises refresh tokens, unredeemed authorization codes, and recorded consent, is operationally critical. Spring Authorization Server (SAS) defaults to in-memory implementations for this state, which is unsuitable for production for two reasons. 
 
-* A restart discards all issued refresh tokens, in-flight authorization codes, and consent records, forcing every user to re-authenticate on each deploy. 
+* A restart discards all issued refresh tokens, unredeemed authorization codes, and consent records, forcing every user to re-authenticate on each deploy. 
 
 * Two replicas hold disjoint state, so an authorization code issued by one instance cannot be exchanged at another, and the `authorization_code` flow breaks once the IdP runs behind a load balancer.
 

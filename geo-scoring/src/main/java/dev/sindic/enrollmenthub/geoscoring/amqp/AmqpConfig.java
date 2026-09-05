@@ -40,7 +40,7 @@ class AmqpConfig {
      * Steady-state and burst concurrency for the listener container (M2 in the geo-scoring
      * review). Threads are virtual ({@link VirtualThreadTaskExecutor}), so the cost of holding
      * idle consumers is dominated by the Rabbit channel each one owns, not by OS threads.
-     * 8/24 keeps in-flight load on self-hosted Nominatim and Redis bounded while still
+     * 8/24 keeps concurrent load on self-hosted Nominatim and Redis bounded while still
      * absorbing realistic enrollment bursts.
      */
     private static final int CONCURRENT_CONSUMERS     = 8;

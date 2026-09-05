@@ -10,7 +10,7 @@ The decision engine's scatter-gather (ADR-13) dispatches parallel signals to ind
 
 ### Detection options
 
-**Option A — DB polling with row-level locking.** A `@Scheduled` job claims correlation rows whose deadline has elapsed while a signal is still `PENDING`, takes a `SELECT FOR UPDATE` lock on each, transitions the still-`PENDING` signals to `FAILED`, and runs the same finalize step the result handler runs (ADR-16, ADR-17). An enrollment whose remaining signals all time out is therefore decided and dispatched on the ordinary path, so emission depends on no single producer. The lock makes the timeout transition and a late-arriving result mutually exclusive, so neither races the other.
+**Option A — DB polling with row-level locking.** A `@Scheduled` job claims correlation rows whose deadline has elapsed while a signal is still `PENDING`, takes a `SELECT FOR UPDATE` lock on each, transitions the still-pending signals to `NotExecuted` (or, for a `REQUIRED` signal, to an explicit failed verdict), and runs the same finalize step the result handler runs (ADR-16, ADR-17). An enrollment whose remaining signals all time out is therefore decided and dispatched on the ordinary path, so emission depends on no single producer. The lock makes the timeout transition and a late-arriving result mutually exclusive, so neither races the other.
 
 **Option B — Broker-native TTL with dead-letter routing.** Each dispatched command is published to a per-request wait queue with a message TTL equal to the deadline. On expiry RabbitMQ dead-letters it to a `timeout.processor` queue that the engine consumes to trigger the transition.
 
@@ -49,7 +49,7 @@ The prerequisite gates do not participate in the scatter-gather. Both are synchr
 
 **Simplicity gate.** Both mechanisms ultimately require the engine to process a timeout and write the correlation record. DB polling keeps all timeout logic in one place, observable with a standard SQL query. Broker-native TTL spreads it across broker topology and a consumer, adding a second infrastructure concern without removing the correlation-record dependency.
 
-**Reversibility.** Detection is easy to swap: DB polling can be replaced with broker-native TTL independently of the policy. Policy is moderate: changing a signal from fail-open to fail-closed is a classification change plus a redeploy, and in-flight requests use the policy in force when they were created.
+**Reversibility.** Detection is easy to swap: DB polling can be replaced with broker-native TTL independently of the policy. Policy is moderate: changing a signal from fail-open to fail-closed is a classification change plus a redeploy, and enrollments already accepted use the policy in force when they were created.
 
 ### Triggers to reconsider
 
@@ -63,7 +63,7 @@ The poller claims expired rows with `SELECT FOR UPDATE SKIP LOCKED`. The WAIT-ve
 
 ## Consequences
 
-**Gains.** Timeout state is fully observable: in-flight requests, timed-out signals, and pending transitions are all queryable from the correlation table with no broker-side inspection, and no extra RabbitMQ topology is required.
+**Gains.** Timeout state is fully observable: undecided enrollments, timed-out signals, and pending transitions are all queryable from the correlation table with no broker-side inspection, and no extra RabbitMQ topology is required.
 
 **Costs.** Fail-open creates a bounded fraud-exposure window during signal-service outages, documented and accepted at current volume. DB polling adds a scheduler dependency, and the polling interval is a tunable: too long and `PENDING` rows sit past their deadline, delaying when the decision is recorded and dispatched (ADR-17).
 

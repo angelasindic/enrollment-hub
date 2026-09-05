@@ -33,8 +33,8 @@ class FraudCheckResultListener {
     /**
      * Inbound replies only. A switch rather than the geo listener's null check because
      * {@link FraudCheckResult} reports a {@link dev.sindic.enrollmenthub.contracts.events.CheckOutcome},
-     * and every one of its values maps to a state. Nothing to reject: a worker's vocabulary has no
-     * value for "no reply arrived" — that is the published {@code SignalOutcome}'s
+     * and every one of its values maps to a state. Nothing to reject: a worker has no way to report
+     * "no reply arrived" — that is the published {@code SignalOutcome}'s
      * {@code NOT_EXECUTED}, which the timeout poller produces and no listener ever sees.
      */
     private static SignalState toSignalState(FraudCheckResult event) {

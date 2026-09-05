@@ -212,8 +212,8 @@ class EventSerializationTest {
 
     @Test
     void fraudCheckResult_allOutcomes_roundTrip() throws Exception {
-        // Every value round-trips, and every value is meaningful: a worker's vocabulary has no
-        // term for "no reply arrived", so there is nothing here to reject.
+        // Every value round-trips, and every value is meaningful: a worker has no way to report
+        // "no reply arrived", so there is nothing here to reject.
         for (var outcome : CheckOutcome.values()) {
             var original = outcome == CheckOutcome.NO_RESULT
                     ? FraudCheckResult.noResult(UUID.randomUUID(), "provider_unavailable")

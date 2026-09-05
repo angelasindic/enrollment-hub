@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import java.util.Objects;
 
 /**
- * The settled or in-flight state of one signal (ADR-14). Five variants, each carrying only the data
+ * The settled or pending state of one signal (ADR-14). Five variants, each carrying only the data
  * it has, so an invalid combination cannot be constructed.
  *
  * <p><b>This type is also the persisted format.</b> There is no separate persistence
