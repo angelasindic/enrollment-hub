@@ -80,7 +80,7 @@ Engine treats its result and its absence:
 
 | Classification   | Missing signal  | Authority over outcome                                   | Current assignment |
 |------------------|-----------------|----------------------------------------------------------|--------------------|
-| `REQUIRED`       | Blocks decision | Authoritative — any outcome                              | Reserved (future)  |
+| `REQUIRED`       | Fail-closed     | Authoritative — any outcome                              | Reserved (future)  |
 | `BEST_EFFORT`    | Fail-open       | Authoritative — any outcome                              | Fraud Detection    |
 | `SCORING_SIGNAL` | Fail-open       | Advisory — `CONDITIONAL_APPROVED` only, never `REJECTED` | Geo-Scoring        |
 

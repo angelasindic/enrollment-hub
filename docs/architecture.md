@@ -102,7 +102,7 @@ The drivers in §1 specify what the system must achieve, while the following con
 
 **Data minimization.** GDPR forbids long-term retention of high-precision spatial data, so anything used for signal derivation expires under an automatic, irreversible 48-hour policy — no permanent geographic map of users is created.
 
-**Decision traceability.** GDPR Art. 22 requires that automated decisions affecting a person be reconstructable after the fact — which request, which signals settled, and why the outcome was reached. Trace context propagates across every service and message boundary, and the decision rationale is recorded alongside the outcome (§8.4).
+**Decision traceability.** GDPR Art. 22 requires that automated decisions affecting a person be reconstructable after the fact — which request, which signals settled, and why the outcome was reached. Trace context propagates across every service and message boundary, and the decision rationale — the settled signal map, each entry carrying its outcome, its risk level, or the reason it has neither — is persisted alongside the outcome on the correlation record and republished on the decision event (§6.3; ADR-14, ADR-17).
 
 **Identity isolation.** Spatial data and identity data are held in separate logical silos, and spatial signals use anonymous identifiers, so a single-service compromise cannot correlate location back to a person.
 
@@ -275,12 +275,12 @@ The aggregation carries no per-signal conditional logic for this case. It dispat
 1. A `BEST_EFFORT` signal that timed out contributes nothing — fail-open. The `DecisionResult` reflects only the
    signals that settled in time.
 2. A `SCORING_SIGNAL` that timed out contributes nothing — fail-open, with no routing consequence.
-3. A `REQUIRED` signal that timed out does not release the completion predicate — the decision is held and the
-   escalation policy in ADR-15 applies. No current `SignalConfig` carries this classification.
+3. A `REQUIRED` signal that timed out settles as an explicit failed verdict — fail-closed — and drives `REJECTED`:
+   an unverifiable required check rejects (ADR-15). No current `SignalConfig` carries this classification.
 
 The decision is computed and recorded on the correlation record once all applicable signals are terminal — by whichever path completes the row, the result handler or the timeout poller running the same finalize step (ADR-17) — and a dispatch relay publishes the `EnrollmentDecisionEvent` out of band. No currently assigned signal holds the decision open beyond the deadline in ADR-15.
 
-**Fail-open annotation.** A fail-open decision carries the normal outcome (`APPROVED` or `CONDITIONAL_APPROVED`) determined by the signals that answered. The missing signal is published with its own account of why: `NOT_EXECUTED` with a reason when no reply arrived before the deadline, or no outcome and a reason when the service ran and could not produce a value. A consumer or an operator can therefore distinguish the two from the signal itself, without a separate annotation on the decision.
+**Fail-open annotation.** A fail-open decision carries the normal outcome (`APPROVED` or `CONDITIONAL_APPROVED`) determined by the signals that answered. The missing signal is published with its own account of why: `NOT_EXECUTED` with a reason when no reply arrived before the deadline, or no outcome and a reason when the service ran and could not produce a value. A consumer can therefore distinguish the two from the signal itself, and the same distinction is preserved on the persisted record for after-the-fact inspection, without a separate annotation on the decision.
 
 **Late-arriving results.** A result that arrives after the decision is recorded finds its correlation slot in a non-`PENDING` terminal state, and the idempotency guard (ADR-16) discards it without modifying the record. Whether a discarded late result should raise a `LateScoreArrived` event, flag the record, or remain visible only via the dead-letter queue is an open decision.
 
@@ -378,7 +378,7 @@ The credit-card prerequisite is implemented end-to-end (ADR-18): the authorizati
 - **Prerequisite tokens.** Validated in memory, not persisted. Only the validation result (pass/fail) and failure reason are logged.
 
 **Pre-production GDPR tasks.** Before go-live: document the lawful basis for fraud processing (legitimate interest,
-Art. 6(1)(f) + Recital 47) with a legitimate-interest assessment; complete a DPIA (Art. 35) covering the fraud profiling; and record the Art. 22 safeguards for the automated decision — the fail-open path and analyst review queue provide the human-intervention route.
+Art. 6(1)(f) + Recital 47) with a legitimate-interest assessment; complete a DPIA (Art. 35) covering the fraud profiling; and record the Art. 22 safeguards for the automated decision — the fail-open path, and `CONDITIONAL_APPROVED` as the route into human review. The review queue behind it is a consumer-side workflow the hub does not own.
 
 ### 8.3 Data Ownership
 
@@ -434,11 +434,11 @@ GDPR data-minimization measures — the 48-hour TTL and the pseudonymized geo-in
 
 ### 8.6 Decision Engine Signal Classification Model
 
-Every signal carries a typed `GateClassification` on its `SignalConfig`, and the aggregation dispatches on that classification rather than on signal identity. The classification fixes two things: whether a missing signal blocks the decision or proceeds fail-open, and whether the result can drive the outcome or can only flag for review. Three values cover it:
+Every signal carries a typed `GateClassification` on its `SignalConfig`, and the aggregation dispatches on that classification rather than on signal identity. The classification fixes two things: whether a missing signal fails closed or fails open, and whether the result can drive the outcome or can only flag for review. Three values cover it:
 
 | Classification   | Missing-signal behavior                                            | Authority over outcome                                 | Current assignment                                                            |
 |------------------|--------------------------------------------------------------------|--------------------------------------------------------|-------------------------------------------------------------------------------|
-| `REQUIRED`       | Blocks decision until signal completes or escalation policy applies | Authoritative — can drive any outcome                  | Reserved; no current signal <br> (future: sanctions screening, regulated KYC) |
+| `REQUIRED`       | Fail-closed; a missing signal settles as a failed verdict (ADR-15) | Authoritative — can drive any outcome                  | Reserved; no current signal <br> (future: sanctions screening, regulated KYC) |
 | `BEST_EFFORT`    | Fail-open; aggregation proceeds without the signal                 | Authoritative — can drive any outcome                  | Fraud Detection                                                               |
 | `SCORING_SIGNAL` | Fail-open; aggregation proceeds without the signal                 | Advisory — can flag for review, cannot drive rejection | Geo-Scoring                                                                   |
 
@@ -564,7 +564,7 @@ Terms this document coins or uses with a specific meaning.
 | Term | Meaning |
 |---|---|
 | **Signal** | One fraud check's contribution to a decision — dispatched as a command, returned as a result, settled as a slot on the correlation record. |
-| **Gate classification** | The typed authority a signal carries (`REQUIRED`, `BEST_EFFORT`, `SCORING_SIGNAL`): whether its absence blocks the decision, and whether its result can drive rejection (§8.6, ADR-14). |
+| **Gate classification** | The typed authority a signal carries (`REQUIRED`, `BEST_EFFORT`, `SCORING_SIGNAL`): whether its absence fails the signal closed or open, and whether its result can drive rejection (§8.6, ADR-14). |
 | **Correlation record** | The durable per-enrollment row in PostgreSQL that gathers signal results, carries the intake ledger and the decision, and bounds the enrollment's consistency domain (§5.4, §8.9, ADR-13). |
 | **Intake ledger** | The `PENDING → COMPLETED` marker on the correlation record that a redelivered intake message reads to decide between re-dispatch and duplicate acknowledgment (§8.7). |
 | **Ingress inversion** | The entry-point pattern: the REST endpoint publishes one durable intake message and does nothing else; a single consumer owns the correlation insert and the per-signal dispatch (§8.7, ADR-13). |
