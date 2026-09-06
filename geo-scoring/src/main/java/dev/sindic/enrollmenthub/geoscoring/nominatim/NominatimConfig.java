@@ -29,7 +29,8 @@ public class NominatimConfig {
                         .toUri())
                 .requestFactory(requestFactory)
                 .requestInterceptor((request, body, execution) -> {
-                    log.debug("Nominatim → {} {}", request.getMethod(), request.getURI());
+                    // Path only — the query string carries the address being geocoded.
+                    log.debug("Nominatim → {} {}", request.getMethod(), request.getURI().getPath());
                     var response = execution.execute(request, body);
                     log.debug("Nominatim ← {}", response.getStatusCode());
                     return response;

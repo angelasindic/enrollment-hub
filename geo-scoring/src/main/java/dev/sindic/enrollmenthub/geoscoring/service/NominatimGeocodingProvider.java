@@ -57,7 +57,7 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                     .body(new ParameterizedTypeReference<>() {});
 
             if (results == null || results.isEmpty()) {
-                log.info("Nominatim {} query returned no results query={}", stage, query);
+                log.info("Nominatim {} query returned no results", stage);
                 return Optional.empty();
             }
 
@@ -66,8 +66,9 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                     Double.parseDouble(first.lat()),
                     Double.parseDouble(first.lon())
             );
-            log.debug("Nominatim {} query geocoded to lat={}, lon={}",
-                    stage, coordinates.latitude(), coordinates.longitude());
+            // Coordinates omitted: resolved from a home address, they are PII themselves.
+            // The density outcome they feed is logged by GeoIndexService.
+            log.debug("Nominatim {} query geocoded successfully", stage);
             return Optional.of(coordinates);
 
         } catch (HttpClientErrorException ex) {
@@ -80,8 +81,8 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
                 throw new TransientGeocodingException(
                         "Nominatim " + stage + " transient client error " + status, ex);
             }
-            log.warn("Nominatim {} client error status={} body={}",
-                    stage, status, ex.getResponseBodyAsString());
+            // Body omitted: Nominatim error responses echo the submitted address back.
+            log.warn("Nominatim {} client error status={}", stage, status);
             return Optional.empty();
         } catch (HttpServerErrorException ex) {
             throw new TransientGeocodingException(
@@ -95,7 +96,8 @@ public class NominatimGeocodingProvider implements GeocodingProvider {
     private void recordUnmappedLabels(List<AddressComponent> components) {
         for (var c : components) {
             if (NominatimLabel.fromLibpostal(c.label()).isEmpty()) {
-                log.warn("Nominatim ignored unmapped libpostal label={} value={}", c.label(), c.value());
+                // Label only — the value is the address fragment and adds nothing to the finding.
+                log.warn("Nominatim ignored unmapped libpostal label={}", c.label());
                 meterRegistry.counter(METRIC_UNMAPPED_LABEL, "label", c.label()).increment();
             }
         }
