@@ -24,11 +24,11 @@ Every signal carries a classification as metadata, and the aggregation dispatche
 
 Three classifications cover the meaningful combinations of missing-signal behaviour and authority over the outcome. A third property rides along with them — the shape of the result a signal produces — and is stated here rather than left implicit, because aggregation dispatches on the classification and then reads the field that shape implies:
 
-| Classification   | Missing-signal behaviour                   | Authority over outcome                                 | Result shape                    |
-|------------------|--------------------------------------------|--------------------------------------------------------|---------------------------------|
-| `REQUIRED`       | Blocks completion; escalation via ADR-15   | Authoritative — can drive any outcome                  | Check-style — a `CheckOutcome`  |
-| `BEST_EFFORT`    | Fail-open; aggregation proceeds without it | Authoritative — can drive any outcome                  | Check-style — a `CheckOutcome`  |
-| `SCORING_SIGNAL` | Fail-open; aggregation proceeds without it | Advisory — can flag for review, cannot drive rejection | Score-style — a `RiskLevel`     |
+| Classification   | Missing-signal behaviour                          | Authority over outcome                                 | Result shape                    |
+|------------------|---------------------------------------------------|--------------------------------------------------------|---------------------------------|
+| `REQUIRED`       | Fail-closed; settles as a failed verdict (ADR-15) | Authoritative — can drive any outcome                  | Check-style — a `CheckOutcome`  |
+| `BEST_EFFORT`    | Fail-open; aggregation proceeds without it        | Authoritative — can drive any outcome                  | Check-style — a `CheckOutcome`  |
+| `SCORING_SIGNAL` | Fail-open; aggregation proceeds without it        | Advisory — can flag for review, cannot drive rejection | Score-style — a `RiskLevel`     |
 
 Result shape is not independently configurable. Reclassifying a signal without changing what its worker reports leaves the aggregation branch reading a field the state does not carry, and the signal contributes nothing — silently, since no branch matches. The pairing is currently held by there being one listener per signal, which is a convention rather than a constraint.
 

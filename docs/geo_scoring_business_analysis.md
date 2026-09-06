@@ -118,13 +118,15 @@ existing fraud signal.
 The Decision Engine treats that score asymmetrically by design.
 The asymmetric aggregation is structural, it doesn't change between rollout phases, unlike thresholds which are adjustable.
 
-The existing fraud signal owns the final outcome: APPROVED, CONDITIONAL_APPROVED, or REJECTED. 
-A HIGH geo-score attaches a `cluster_review_required` flag and a `decision_reason`
-annotation to the `EnrollmentDecisionEvent`, but it can't on its own turn an APPROVED into a REJECTED.
+The existing fraud signal owns the final outcome: APPROVED, CONDITIONAL_APPROVED, or REJECTED.
+A HIGH or EXTREME geo-score settles the decision as CONDITIONAL_APPROVED, but it can't on its own turn an APPROVED
+into a REJECTED.
 This is a general rule: Geo-Scoring can only escalate review routing; it never upgrades or downgrades the base fraud decision.
 
-Downstream consumers of the event (fraud operations tooling, cluster-level review queues) use those annotations to route flagged
-enrollments into review. The hub publishes what review routing needs; it doesn't own the review workflow.
+Downstream consumers of the event (fraud operations tooling, cluster-level review queues) route on the decision result
+itself: CONDITIONAL_APPROVED is the review instruction, and the `GEO_SCORE` entry of the event's `signals` map carries
+the risk level behind it. The event holds no separate annotation field. The hub publishes what review routing needs;
+it doesn't own the review workflow.
 
 The asymmetric aggregation is what makes the threshold-based rollout in §5 safe. The score's only operational lever is review
 routing, so tuning thresholds changes how much the review queue fills up, not how often someone gets wrongly rejected.
@@ -203,10 +205,13 @@ still make sense is exactly what the planning cycle decides if the monitoring tr
 Geo-Scoring is meant to augment the existing fraud layer, not gate it. If the Geo-Scoring service is down for any
 reason (a geocoding API outage, a Redis partition, scoring-service degradation), the hub carries on with the existing
 fraud signal alone, and the published decision carries the geo-signal with no outcome and a reason saying why it has
-none. Enrollments decided without a geo-score get flagged for cluster-level review, not rejected. 
+none. A missing score contributes nothing to the aggregation: the decision is whatever the fraud signal alone supports.
+An enrollment is therefore never rejected for the absence of a geo-score — and never routed to review by that absence
+either, since only a HIGH or EXTREME score escalates. The reason published on the signal is what distinguishes a missing
+score from a benign one.
 
 The point of failing open is that a new detection layer shouldn't become a new single point of failure. The Architecture
-Document covers the implementation and the fail-open timeout policy in §6.4.
+Document covers the implementation and the fail-open timeout policy in §6.3.
 
 ### 6.2 The Dual Role of the 48-Hour TTL
 
@@ -256,5 +261,5 @@ guessed at.
 - **Project README:** Overall project narrative, portfolio implementation notes, tech stack, and running instructions.
   Entry point for the repository.
 - **Architecture Document:** *Enrollment Hub — Event-Driven Async Pipeline*. Specifically: durable correlation record (
-  §5.3, §8.6), scatter-gather topology (§6), fail-open logic (§6.4), 48-hour TTL privacy strategy (§8.2),
-  atomic geo-index operations, entry-point durability and causal ordering (§8.6).
+  §5.4), signal classification model (§8.6), scatter-gather topology (§6), fail-open logic (§6.3), 48-hour TTL privacy
+  strategy (§8.2), atomic geo-index operations, entry-point durability and causal ordering (§8.7).
