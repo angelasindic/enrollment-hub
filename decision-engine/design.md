@@ -645,7 +645,7 @@ otherwise leaves cold.
 
 ### Operational metrics
 
-Three signals are wired into the Prometheus rules (`monitoring/prometheus/rules/`), each backing
+Four signals are wired into the Prometheus rules (`monitoring/prometheus/rules/`), each backing
 one of this document's guarantees.
 
 The first, `decisionengine_publish_failures_total` (tagged `reason=nack|returned`), increments
@@ -670,6 +670,16 @@ The third is the ADR-17 outbox signal, `decisionengine_outbox_oldest_age_seconds
 state (the eager dispatch drains the outbox within milliseconds); growth means both emission
 triggers are failing and fires `StuckDecisionOutbox` before downstream consumers notice missing
 decisions.
+
+The fourth is the ADR-15 fail-open signal, `decisionengine_signal_settled_total` (tagged
+`signal` and `state`, counted in `SignalSettlementMetrics`) — how each signal settled, recorded
+once per decision at `finalizeDecision`, the step both completion paths converge on. It is the
+only one of the four that reports a condition the pipeline does not otherwise expose: a signal
+settling `NO_RESULT` or `NOT_EXECUTED` contributes nothing to the aggregation, so the enrollment
+is decided and dispatched normally on less evidence, with no failure anywhere to count. Every
+terminal state is counted so `SignalFailingOpen` can alert on a *share* of settlements rather
+than an absolute count, and all series are registered at startup so the ratio has a denominator
+before the first decision.
 
 ### Security
 

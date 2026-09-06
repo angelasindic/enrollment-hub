@@ -7,6 +7,7 @@ import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
 import dev.sindic.enrollmenthub.decisionengine.domain.SignalState;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentRepository;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -44,13 +46,16 @@ class EnrollmentServiceTest {
     @Mock EnrollmentRepository repository;
     @Mock DecisionDispatcher dispatcher;
 
+    SimpleMeterRegistry meterRegistry;
     EnrollmentService service;
 
     @BeforeEach
     void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
         service = new EnrollmentService(
                 repository,
                 dispatcher,
+                new SignalSettlementMetrics(meterRegistry),
                 tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build(),
                 FIXED_CLOCK);
         // The production callers run inside @Transactional; the finalize step registers an
@@ -272,5 +277,78 @@ class EnrollmentServiceTest {
         then(repository).should(never()).updateSignals(any(), any());
         simulateCommit();
         then(dispatcher).should(never()).dispatchNow(any());
+    }
+
+    /** Reads one settlement counter by its tags. */
+    private double settled(SignalConfig signal, String state) {
+        return meterRegistry.get(SignalSettlementMetrics.SETTLED_METRIC)
+                .tags("signal", signal.name(), "state", state)
+                .counter().count();
+    }
+
+    @Test
+    void settlementCounters_areRegisteredBeforeTheFirstDecision() {
+        // The fail-open alert is a ratio; an absent denominator series is not the same as a zero
+        // one to increase(), so every series must exist from startup.
+        assertThat(settled(SignalConfig.GEO_SCORE, "NOT_EXECUTED")).isZero();
+        assertThat(settled(SignalConfig.GEO_SCORE, "SCORED")).isZero();
+        assertThat(settled(SignalConfig.FRAUD_CHECK, "NO_RESULT")).isZero();
+        assertThat(settled(SignalConfig.FRAUD_CHECK, "CHECKED")).isZero();
+    }
+
+    @Test
+    void timedOutSignalIsCountedFailOpen_whileTheDecisionItselfLooksHealthy() {
+        // GIVEN a CREDIT_CARD row whose deadline passed with GEO_SCORE still pending.
+        var enrollmentId = UUID.randomUUID();
+        var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
+        given(repository.claimPendingTimeouts(any(), any())).willReturn(List.of(entity));
+        given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(1);
+
+        service.processExpiredTimeouts(TIMEOUT.plusSeconds(1), 10);
+
+        // THEN the decision is APPROVED — nothing in the outcome says a signal is missing.
+        var decisionCaptor = ArgumentCaptor.forClass(String.class);
+        then(repository).should().completeWithDecision(
+                eq(enrollmentId), anyString(), decisionCaptor.capture(), any(), any());
+        assertThat(decisionCaptor.getValue()).isEqualTo(DecisionResult.APPROVED.name());
+
+        // ...and the counter is the only place the degradation shows.
+        assertThat(settled(SignalConfig.GEO_SCORE, "NOT_EXECUTED")).isEqualTo(1);
+        assertThat(settled(SignalConfig.FRAUD_CHECK, "CHECKED")).isEqualTo(1);
+        assertThat(settled(SignalConfig.GEO_SCORE, "SCORED")).isZero();
+    }
+
+    @Test
+    void signalThatRanWithoutAResultIsCountedSeparatelyFromOneThatNeverRan() {
+        // NO_RESULT and NOT_EXECUTED are both fail-open but have different causes — the alert
+        // splits them by the state tag, so they must not share a series.
+        var enrollmentId = UUID.randomUUID();
+        var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
+        given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
+        given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(1);
+
+        service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
+                new SignalState.NoResult("geocoding unavailable"));
+
+        assertThat(settled(SignalConfig.GEO_SCORE, "NO_RESULT")).isEqualTo(1);
+        assertThat(settled(SignalConfig.GEO_SCORE, "NOT_EXECUTED")).isZero();
+    }
+
+    @Test
+    void nothingIsCountedWhenTheDecisionGuardRejectsTheWrite() {
+        // A row another path already completed must not also be counted here.
+        var enrollmentId = UUID.randomUUID();
+        var entity = TestEntityFactory.creditCard(enrollmentId, NOW, TIMEOUT);
+        entity.getSignals().put(SignalConfig.FRAUD_CHECK, new SignalState.Checked(CheckOutcome.OK));
+        given(repository.findByEnrollmentIdForUpdate(enrollmentId)).willReturn(Optional.of(entity));
+        given(repository.completeWithDecision(eq(enrollmentId), anyString(), any(), any(), any())).willReturn(0);
+
+        service.recordSignalResult(enrollmentId, SignalConfig.GEO_SCORE,
+                new SignalState.Scored(RiskLevel.LOW));
+
+        assertThat(settled(SignalConfig.GEO_SCORE, "SCORED")).isZero();
+        assertThat(settled(SignalConfig.FRAUD_CHECK, "CHECKED")).isZero();
     }
 }

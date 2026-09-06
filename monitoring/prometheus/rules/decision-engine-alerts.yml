@@ -35,3 +35,36 @@ groups:
             The oldest decided-but-undispatched correlation row is {{ $value }}s old.
             Check broker health and decision-engine logs; the sweep re-publishes
             automatically once the broker accepts publishes again (ADR-17).
+
+      # ADR-15 fail-open visibility. A signal that never answered (NOT_EXECUTED)
+      # or ran without producing a value (NO_RESULT) contributes nothing to the
+      # aggregation — enrollments are still decided and dispatched, on less
+      # evidence, with no other symptom. This is the only alert that fires while
+      # the pipeline looks healthy.
+      #
+      # Expressed as a proportion of settlements per signal, not a raw count: at
+      # 5 RPS and at 500 the same absolute number means different things. The
+      # `>= 10` denominator guard keeps a handful of settlements on a quiet
+      # instance from tripping a ratio.
+      - alert: SignalFailingOpen
+        expr: >
+          (
+            sum by (signal) (increase(decisionengine_signal_settled_total{state=~"NO_RESULT|NOT_EXECUTED"}[30m]))
+            /
+            sum by (signal) (increase(decisionengine_signal_settled_total[30m]))
+          ) > 0.2
+          and
+          sum by (signal) (increase(decisionengine_signal_settled_total[30m])) >= 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.signal }} is failing open on {{ $value | humanizePercentage }} of decisions"
+          description: >
+            More than 20% of {{ $labels.signal }} settlements in the last 30 minutes
+            produced no usable result, so decisions are being taken without that
+            signal (ADR-15 fail-open). Enrollments are unaffected and nothing is
+            lost — check the signal's worker, its dependencies, and the DLQ.
+            Split NOT_EXECUTED (no reply before the deadline — worker or broker)
+            from NO_RESULT (worker answered, could not produce a value — its own
+            dependency) by the `state` label.
