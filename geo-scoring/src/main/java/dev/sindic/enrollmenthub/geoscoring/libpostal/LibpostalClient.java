@@ -48,7 +48,8 @@ public class LibpostalClient {
                 throw new TransientGeocodingException(
                         "libpostal transient client error " + status, ex);
             }
-            log.warn("libpostal client error status={} body={}", status, ex.getResponseBodyAsString());
+            // Body omitted: libpostal is called with the address as a query param and echoes it back.
+            log.warn("libpostal client error status={}", status);
             return List.of();
         } catch (HttpServerErrorException ex) {
             throw new TransientGeocodingException(

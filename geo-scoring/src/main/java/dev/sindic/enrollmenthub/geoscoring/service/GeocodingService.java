@@ -57,7 +57,10 @@ public class GeocodingService {
             return cached;
         }
 
-        log.info("Geocoding cache miss — resolving via provider address={}", parsed.canonical());
+        // Logs the peppered digest, never the address itself: the key is stable across
+        // miss/store/hit for the same address, so it carries the diagnostic value the
+        // plaintext did without putting an address in the log.
+        log.info("Geocoding cache miss — resolving via provider key={}", cacheKey);
         var resolved = provider.geocode(parsed.components());
 
         resolved.ifPresent(coordinates -> cacheService.store(cacheKey, coordinates, cacheTtl));
