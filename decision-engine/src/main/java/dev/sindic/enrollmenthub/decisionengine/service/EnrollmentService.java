@@ -71,10 +71,16 @@ public class EnrollmentService {
      * Records one signal result on the locked correlation row, per the ADR-16 protocol above.
      * Duplicate and late results are discarded idempotently.
      *
-     * @throws UnknownCorrelationException if no row exists for {@code enrollmentId}
+     * @throws UnknownCorrelationException  if no row exists for {@code enrollmentId}
+     * @throws SignalShapeMismatchException if the state is one the signal's classification cannot
+     *         use — checked before the row is touched, since the row is not what is wrong
      */
     @Transactional
     public void recordSignalResult(UUID enrollmentId, SignalConfig signal, SignalState newState) {
+        if (!signal.classification().admits(newState)) {
+            throw new SignalShapeMismatchException(signal, newState);
+        }
+
         var entity = repository.findByEnrollmentIdForUpdate(enrollmentId)
                 .orElseThrow(() -> new UnknownCorrelationException(enrollmentId));
 
