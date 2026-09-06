@@ -54,15 +54,18 @@ public class EnrollmentService {
 
     private final EnrollmentRepository repository;
     private final DecisionDispatcher dispatcher;
+    private final SignalSettlementMetrics signalMetrics;
     private final JsonMapper jsonMapper;
     private final Clock clock;
 
     EnrollmentService(EnrollmentRepository repository,
                       DecisionDispatcher dispatcher,
+                      SignalSettlementMetrics signalMetrics,
                       JsonMapper jsonMapper,
                       Clock clock) {
         this.repository = repository;
         this.dispatcher = dispatcher;
+        this.signalMetrics = signalMetrics;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
     }
@@ -142,6 +145,9 @@ public class EnrollmentService {
      *
      * <p>Precondition: the caller holds the row lock and every signal in {@code settledSignals}
      * has reached a terminal state.
+     *
+     * <p>Both paths converge here, so this is also where {@link SignalSettlementMetrics} counts how
+     * each signal settled — the only place fail-open becomes observable (ADR-15).
      */
     private void finalizeDecision(EnrollmentEntity entity, Map<SignalConfig, SignalState> settledSignals) {
         var enrollmentId = entity.getEnrollmentId();
@@ -160,6 +166,7 @@ public class EnrollmentService {
             return;
         }
 
+        signalMetrics.recordSettled(settledSignals);
         registerEagerDispatch(enrollmentId);
     }
 

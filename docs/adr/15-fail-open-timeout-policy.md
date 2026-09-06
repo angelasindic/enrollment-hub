@@ -63,7 +63,7 @@ The poller claims expired rows with `SELECT FOR UPDATE SKIP LOCKED`. The WAIT-ve
 
 ## Consequences
 
-**Gains.** Timeout state is fully observable: undecided enrollments, timed-out signals, and pending transitions are all queryable from the correlation table with no broker-side inspection, and no extra RabbitMQ topology is required.
+**Gains.** Timeout state is fully observable: undecided enrollments, timed-out signals, and pending transitions are all queryable from the correlation table with no broker-side inspection, and no extra RabbitMQ topology is required. Aggregate fail-open rate is a metric rather than a query — `decisionengine_signal_settled_total`, tagged by signal and terminal state, is recorded at the finalize step both completion paths converge on, and the `SignalFailingOpen` rule alerts on a sustained share. Without it the policy would be unmonitored by construction: a fail-open decision is by design indistinguishable, from the outside, from one taken on complete evidence.
 
 **Costs.** Fail-open creates a bounded fraud-exposure window during signal-service outages, documented and accepted at current volume. DB polling adds a scheduler dependency, and the polling interval is a tunable: too long and `PENDING` rows sit past their deadline, delaying when the decision is recorded and dispatched (ADR-17).
 
