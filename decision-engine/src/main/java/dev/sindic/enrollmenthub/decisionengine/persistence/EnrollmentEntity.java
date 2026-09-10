@@ -26,9 +26,16 @@ import java.util.UUID;
  * that {@code UPDATE}, not something to fetch back.
  *
  * <p>Two columns exist to serve the ADR-17 outbox rather than the decision itself:
- * {@code originalRequest}, written once at intake so a replay can rebuild the decision event
- * without a second lookup, and {@code decisionId}, generated at decide time and published in
+ * {@code originalRequest}, written at intake because the engine has no other source for the
+ * payload the decision event must carry — the intake message is long acked, and ADR-02 rules out
+ * asking the Account Service — and {@code decisionId}, generated at decide time and published in
  * place of the {@code enrollmentId} primary key.
+ *
+ * <p>The two have opposite lifetimes. {@code decisionId} is the frozen decision of record and
+ * outlives delivery; {@code originalRequest} is an ingredient of the outbound event and has no
+ * reader once {@code dispatchedAt} is stamped, so the retention job nulls it (ADR-20). A row with
+ * {@code dispatchedAt IS NULL} therefore always carries its payload, which is what the outbox
+ * replay depends on.
  */
 @Entity
 @Table(name = "enrollments", schema = "enrollment_hub")
@@ -42,8 +49,10 @@ public class EnrollmentEntity {
     @Column(name = "payment_type", nullable = false, updatable = false)
     private PaymentType paymentType;
 
+    // Nullable and updatable for exactly one write: the retention strip (ADR-20). Nothing else
+    // updates it — the value is set by the intake INSERT and never revised.
     @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "original_request", nullable = false, updatable = false, columnDefinition = "jsonb")
+    @Column(name = "original_request", columnDefinition = "jsonb")
     private String originalRequest;
 
     @JdbcTypeCode(SqlTypes.JSON)

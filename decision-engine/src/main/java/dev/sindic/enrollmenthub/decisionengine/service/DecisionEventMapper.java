@@ -45,6 +45,16 @@ final class DecisionEventMapper {
             UUID decisionId,
             Instant decidedAt) {
 
+        if (entity.getOriginalRequest() == null) {
+            // Structurally unreachable: the retention job strips only dispatched rows, and a
+            // dispatched row is never re-claimed. Reaching it means the strip predicate and the
+            // outbox claim predicate have drifted apart, which would silently stop delivering
+            // decisions — fail loudly rather than NPE inside the deserializer (ADR-20).
+            throw new IllegalStateException(
+                    "Cannot build a decision event for enrollmentId=" + entity.getEnrollmentId()
+                            + ": the payload was stripped while the row was still undispatched");
+        }
+
         var contractSignals = new HashMap<String, EnrollmentSignal>();
         for (var entry : signals.entrySet()) {
             contractSignals.put(entry.getKey().name(), toContractSignal(entry.getValue()));

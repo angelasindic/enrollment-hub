@@ -21,5 +21,5 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "decision-engine.sweep")
 public record SweepProperties(
         @DefaultValue("10s") Duration interval,
-        @DefaultValue("100") int batchSize) {
+            @DefaultValue("100") int batchSize) {
 }

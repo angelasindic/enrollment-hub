@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -198,6 +199,60 @@ public interface EnrollmentRepository extends JpaRepository<EnrollmentEntity, UU
                AND r.dispatchedAt IS NULL
             """)
     Optional<Instant> findOldestUndispatchedDecidedAt();
+
+    /**
+     * Nulls {@code original_request} on a batch of delivered rows (ADR-20). {@code dispatched_at IS
+     * NOT NULL} is the whole condition, and there is no waiting period: the payload's only reader
+     * is the {@code EnrollmentDecisionEvent}, that event was confirmed by the broker before the
+     * stamp, and from the confirm onward it and its retention belong to the Account Service, which
+     * owns the queue it lands on (ADR-13 §Channel Ownership).
+     *
+     * <p>The predicate is the exact complement of every state that still has a reader here:
+     * {@link #claimUndispatched} selects {@code dispatched_at IS NULL} and {@link #markDispatched}
+     * is guarded on it, so no row this statement touches can be re-claimed or re-published, and no
+     * row the outbox or the timeout poller can claim is reachable from here at any age.
+     *
+     * <p>Native, and batched through a {@code SKIP LOCKED} subselect rather than the
+     * {@code @Lock} + {@code Pageable} idiom used by the claim methods — those return entities for
+     * a caller to process, while this is a set-based write that must not load rows to perform it.
+     * Transactional here rather than at a service: the statement is the whole unit of work, so a
+     * wrapper would add a layer and no boundary.
+     *
+     * @param batchSize rows per statement; the caller drains while this equals {@code batchSize}
+     * @return rows stripped
+     */
+    @Transactional
+    @Modifying
+    @Query(value = """
+            UPDATE enrollment_hub.enrollments
+               SET original_request = NULL
+             WHERE enrollment_id IN (
+                   SELECT enrollment_id
+                     FROM enrollment_hub.enrollments
+                    WHERE original_request IS NOT NULL
+                      AND dispatched_at IS NOT NULL
+                    ORDER BY dispatched_at
+                    LIMIT :batchSize
+                    FOR UPDATE SKIP LOCKED)
+            """, nativeQuery = true)
+    int stripDispatchedPayloads(@Param("batchSize") int batchSize);
+
+    /**
+     * Intake time of the oldest row still holding an enrollment payload — the
+     * {@code decisionengine.payload.oldest.age} gauge (ADR-20). This is the compliance reading:
+     * it answers "how long has this service been holding personal data" directly, rather than by
+     * inference from the retention job's counters. Empty when no row holds a payload.
+     *
+     * <p>Served by {@code idx_enrollments_payload_held}, which indexes only payload-bearing rows.
+     * A healthy value is bounded by how long a row legitimately holds a payload: until it is
+     * decided and delivered, then until the next retention pass. An undecided row stuck past its
+     * timeout raises it too, which is intended — that row is also holding PII.
+     */
+    @Query("""
+            SELECT MIN(r.createdAt) FROM EnrollmentEntity r
+             WHERE r.originalRequest IS NOT NULL
+            """)
+    Optional<Instant> findOldestHeldPayloadCreatedAt();
 
     /**
      * Lock-free counterpart to {@link #claimPendingTimeouts} for observing table state; unusable

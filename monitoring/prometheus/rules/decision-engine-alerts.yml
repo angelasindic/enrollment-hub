@@ -68,3 +68,34 @@ groups:
             Split NOT_EXECUTED (no reply before the deadline — worker or broker)
             from NO_RESULT (worker answered, could not produce a value — its own
             dependency) by the `state` label.
+
+      # ADR-20 storage limitation. The gauge is the age of the oldest correlation
+      # row still holding an enrollment payload, so it answers the compliance
+      # question directly — how long has this service held personal data — rather
+      # than by inference from the retention job's counters.
+      #
+      # Healthy is bounded by how long a row legitimately holds a payload: until it
+      # is decided (scatter-gather timeout, 1m) and delivered, then until the next
+      # retention pass (15m). One hour leaves margin for a long batch drain. The
+      # gauge reads the same whether
+      # the cause is a stalled retention job, a decision stuck in the outbox, or a
+      # row the timeout poller never finalized; all three are the service holding
+      # PII longer than §8.2 says it does. StuckDecisionOutbox catches the second
+      # case sooner and more specifically, so this firing alone points at retention.
+      #
+      # NaN means the probe failed, not that nothing is held (RetentionMetricsConfig),
+      # and NaN does not satisfy the comparison — a database outage silences this
+      # alert rather than clearing it. DecisionPublishFailures and the datasource's
+      # own up metric are what surface that.
+      - alert: EnrollmentPayloadHeldTooLong
+        expr: decisionengine_payload_oldest_age_seconds > 3600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Enrollment payload held beyond the retention window"
+          description: >
+            The oldest correlation row still holding an enrollment payload is
+            {{ $value }}s old, well past a normal delivery. Check that the retention
+            job is running and enabled (decision-engine.retention.enabled), and that
+            decisionengine_payload_stripped_total is advancing. See ADR-20.
