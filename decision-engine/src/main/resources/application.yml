@@ -100,5 +100,16 @@ decision-engine:
     # Rows claimed per phase transaction; small batches bound row-lock duration and the duplicate
     # blast radius of a mid-batch publish failure in the dispatch phase.
     batch-size: ${DECISION_ENGINE_SWEEP_BATCH_SIZE:100}
+  retention:
+    # Storage limitation on original_request (ADR-20). Its own schedule rather than a third phase
+    # of the sweep: the sweep merges its phases because both sit in the same latency class, and
+    # retention — measured in hours — does not.
+    # No waiting period after the confirm: nothing here reads the payload once dispatched_at is
+    # stamped, and recovering a delivered EnrollmentDecisionEvent — the only message the payload is
+    # read to build — belongs to the Account Service, which owns that queue (ADR-13 §Channel
+    # Ownership). Set enabled=false to stop the job; there is no window to widen instead.
+    enabled: ${DECISION_ENGINE_RETENTION_ENABLED:true}
+    interval: ${DECISION_ENGINE_RETENTION_INTERVAL:15m}
+    batch-size: ${DECISION_ENGINE_RETENTION_BATCH_SIZE:500}
   amqp:
     confirm-timeout: ${DECISION_ENGINE_AMQP_CONFIRM_TIMEOUT:5s}

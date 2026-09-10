@@ -13,9 +13,16 @@ CREATE TABLE enrollment_hub.enrollments (
     enrollment_id           UUID            PRIMARY KEY,
     payment_type            VARCHAR(20)     NOT NULL,
 
-    -- Full original enrollment request, stored at intake so the decision event
-    -- can carry it to downstream consumers without a separate lookup.
-    original_request        JSONB           NOT NULL,
+    -- Full original enrollment request. The engine has no other source for the payload the
+    -- decision event carries downstream — the intake message is long acked and ADR-02 rules out
+    -- asking the Account Service — so the row is where it lives, from intake until the publisher
+    -- confirm returns. Nullable because that hold ends there: once dispatched_at is stamped
+    -- the payload has no reader (claimUndispatched selects dispatched_at IS NULL and
+    -- markDispatched is guarded on it, so a stamped row is never re-claimed), and
+    -- PayloadRetentionJob erases it on the next pass (ADR-20).
+    -- The invariant that replaces NOT NULL is narrower and enforced by that predicate rather
+    -- than by the schema: a row with dispatched_at IS NULL always carries its payload.
+    original_request        JSONB,
 
     -- Signal state map (JSONB)
     -- Map keyed by SignalConfig name (e.g. 'GEO_SCORE', 'FRAUD_CHECK').
@@ -62,3 +69,10 @@ CREATE INDEX idx_enrollments_signals_jsonb
 CREATE INDEX idx_enrollments_undispatched
     ON enrollment_hub.enrollments (decided_at)
     WHERE decision_result IS NOT NULL AND dispatched_at IS NULL;
+
+-- Partial index over the rows that still hold an enrollment payload (ADR-20). Serves both the
+-- retention claim (ordered by dispatched_at) and the held-payload age gauge, and shrinks toward
+-- empty in steady state — same shape, and same reason, as idx_enrollments_undispatched.
+CREATE INDEX idx_enrollments_payload_held
+    ON enrollment_hub.enrollments (dispatched_at)
+    WHERE original_request IS NOT NULL;

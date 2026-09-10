@@ -234,7 +234,7 @@ The guarantee model and its reasoning are in ADR-13 §Delivery & Concurrency Gua
 enrollment_hub.enrollments
   - enrollment_id           UUID         PRIMARY KEY   ← idempotency key for intake redelivery; never published downstream
   - payment_type         VARCHAR(20)  NOT NULL       ← CREDIT_CARD | INVOICE — routing discriminator
-  - original_request     JSONB        NOT NULL       ← full enrollment data captured at intake; forwarded in EnrollmentDecisionEvent
+  - original_request     JSONB        NULL          ← full enrollment data captured at intake; forwarded in EnrollmentDecisionEvent, then erased once dispatched (ADR-20)
   - signals              JSONB        NOT NULL       ← Map<<SignalConfig, SignalState>; only applicable signals are present
   - intake_status        VARCHAR(20)  NOT NULL       ← intake idempotency ledger: PENDING → COMPLETED (ADR-13 §Ingress Inversion); default 'PENDING'
   - decision_result      VARCHAR(30)  NULL          ← APPROVED | REJECTED | CONDITIONAL_APPROVED — set when all signals settle
@@ -600,9 +600,36 @@ for row in claim:
 nacked publish would otherwise look delivered and the row would never be re-claimed, losing the
 decision.
 
-**Retention ordering.** Any cleanup of terminal rows deletes only rows with `dispatched_at IS NOT
+**Retention ordering.** Any cleanup of terminal rows touches only rows with `dispatched_at IS NOT
 NULL`, never a row in the `decision_result NOT NULL, dispatched_at NULL` outbox state, which is
 the dispatch phase's durable work item.
+
+`PayloadRetentionJob` is the only implementer (ADR-20), and it erases rather than deletes: it nulls
+`original_request` on the first pass after `dispatched_at` is stamped, with no waiting period. From
+the publisher confirm onward the `EnrollmentDecisionEvent` — the only message the payload is read
+to build — and its retention belong to the Account Service, which owns the queue it lands on
+(ADR-13 §Channel Ownership), so a window here would hold personal data for a recovery this service
+neither performs nor owns. The engine's own intake and check-request queues are unaffected: it owns
+those and their DLQs. No row is removed.
+
+**The two passes run concurrently.** `spring.threads.virtual.enabled` replaces Spring's default
+single-threaded `ThreadPoolTaskScheduler` with a `SimpleAsyncTaskScheduler` carrying no concurrency
+limit, so `EnrollmentSweepJob` and `PayloadRetentionJob` are not serialised onto one thread —
+`fixedDelay` only stops a pass overlapping itself. That is safe by construction rather than by
+timing: `dispatched_at` is written only after the publisher confirm, every publisher builds its
+event from an entity loaded before that stamp, and retention claims only stamped rows. The two
+therefore never contend for the same row, and where a handler does hold one — a late result for an
+already-delivered enrollment — retention's `FOR UPDATE SKIP LOCKED` steps around it rather than
+waiting. `PayloadRetentionConcurrencyIT` pins both halves.
+
+Its predicate is the exact complement of every state with a live reader, which extends the
+protection past the outbox for free: a row the timeout poller can claim has `decision_result IS
+NULL`, hence `dispatched_at IS NULL`, hence its payload is unreachable at any age. The resulting
+invariant — `dispatched_at IS NULL ⟹ original_request IS NOT NULL` — is what keeps the dispatch
+replay safe, and `DecisionEventMapper` throws explicitly rather than dereferencing null if it is
+ever violated. `idx_enrollments_payload_held` serves the claim and the
+`decisionengine.payload.oldest.age` gauge; like `idx_enrollments_undispatched` it indexes only the
+rows still in that state, so the retention tick is a probe rather than a scan.
 
 **Crash-window recovery.**
 
