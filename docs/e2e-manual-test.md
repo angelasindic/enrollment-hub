@@ -24,7 +24,7 @@ exercises the dual-token custody (login JWT + `credit_card_check` prerequisite) 
 ## Step 0 — Install contract module
 Optional: Build and verify whole reactor first
 ```bash
-cd /Users/angela/portfolio/enrollment-hub
+cd <root enrollment-hub>
 ./mvnw clean verify
 ```
 Then install contracts (and parent pom)

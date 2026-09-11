@@ -188,6 +188,7 @@ The core pipeline, security perimeter, and observability are implemented. A few 
 | [Geo-Scoring Business Analysis](docs/geo_scoring_business_analysis.md) | The synthetic-identity fraud pattern, the gap in existing defences, the geo-temporal clustering rationale, and the phased rollout strategy |
 | [Architecture Decision Records](docs/adr) | The dense decision log — every non-trivial choice, with context, options, trade-offs, and triggers to reconsider |
 | [DLQ replay runbook](docs/runbook-dlq-replay.md) | The operational procedure behind the `DlqNonEmpty` alert — inspect, classify, replay, or discard |
+| [Security controls](docs/security-controls.md) | Control-by-control map — where each is implemented, the test that pins it, the document that argues it, and what is not implemented |
 
 Each service also carries its own `design.md` / `README.md` describing its internals.
 
@@ -197,21 +198,34 @@ Each service also carries its own `design.md` / `README.md` describing its inter
 
 Services run on the host against Docker Compose infrastructure.
 
-**1. Start infrastructure** (PostgreSQL, RabbitMQ, Redis, Nominatim, libpostal):
+**1. Create `.env`** from the template and set `GEOCODING_CACHE_HMAC_SECRET`, the HMAC-SHA256 pepper for
+geo-scoring's geocoding cache keys. It has no default; geo-scoring does not start without it.
+
+```bash
+cp .env.example .env
+printf 'GEOCODING_CACHE_HMAC_SECRET=%s\n' "$(openssl rand -base64 32)" > .env  # 32 random bytes, base64-encoded written to .env 
+```
+
+Changing the value re-keys the cache, so the next lookup of every address goes to Nominatim until the cache re-warms
+(see *Pepper rotation* in [`geo-scoring/design.md`](geo-scoring/design.md)).
+
+**2. Start infrastructure** (PostgreSQL, RabbitMQ, Redis, Nominatim, libpostal):
 
 ```bash
 docker compose up -d
 ```
 
-**2. (Optional) Start the observability stack** (OTel Collector, Tempo, Loki, Prometheus, Grafana at `localhost:3000`):
+**3. (Optional) Start the observability stack** (OTel Collector, Tempo, Loki, Prometheus, Grafana at `localhost:3000`):
 
 ```bash
 docker compose -f otel-local/docker-compose.yml up -d
 ```
 
-**3. Run the services** (each in its own shell, or from the IDE):
+**4. Run the services** (each in its own shell, or from the IDE). Maven does not read `.env`; export it into the
+shell that runs geo-scoring, or add it to the IDE run configuration's environment:
 
 ```bash
+set -a; source .env; set +a
 ./mvnw -pl authorization-server spring-boot:run
 ./mvnw -pl decision-engine     spring-boot:run
 ./mvnw -pl geo-scoring         spring-boot:run
