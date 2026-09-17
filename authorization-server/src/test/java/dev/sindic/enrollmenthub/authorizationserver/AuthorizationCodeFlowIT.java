@@ -76,7 +76,7 @@ class AuthorizationCodeFlowIT extends BaseIntegrationTest {
         MvcResult result = mockMvc.perform(post("/oauth2/token")
                         .param("grant_type", "client_credentials")
                         .param("scope", "prerequisite:issue")
-                        .with(httpBasic("payment-check-client", "payment-check-client-secret")))
+                        .with(httpBasic("payment-check-client", PAYMENT_CHECK_CLIENT_SECRET)))
                 .andExpect(status().isOk())
                 .andReturn();
 
@@ -134,7 +134,7 @@ class AuthorizationCodeFlowIT extends BaseIntegrationTest {
                         .param("code", code)
                         .param("redirect_uri", REDIRECT_URI)
                         .param("code_verifier", codeVerifier)
-                        .with(httpBasic("enrollment-login-client", "enrollment-login-client-secret")))
+                        .with(httpBasic("enrollment-login-client", LOGIN_CLIENT_SECRET)))
                 .andExpect(status().isOk())
                 .andReturn();
         return readJson(tokenResult);

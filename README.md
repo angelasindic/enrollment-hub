@@ -198,16 +198,38 @@ Each service also carries its own `design.md` / `README.md` describing its inter
 
 Services run on the host against Docker Compose infrastructure.
 
-**1. Create `.env`** from the template and set `GEOCODING_CACHE_HMAC_SECRET`, the HMAC-SHA256 pepper for
-geo-scoring's geocoding cache keys. It has no default; geo-scoring does not start without it.
+**1. Create `.env`** with the secrets listed in `.env.example`. None has a default; each value is 32 random bytes,
+base64-encoded:
 
 ```bash
-cp .env.example .env
-printf 'GEOCODING_CACHE_HMAC_SECRET=%s\n' "$(openssl rand -base64 32)" > .env  # 32 random bytes, base64-encoded written to .env 
+{
+  printf 'GEOCODING_CACHE_HMAC_SECRET=%s\n'    "$(openssl rand -base64 32)"
+  printf 'ENROLLMENT_LOGIN_CLIENT_SECRET=%s\n' "$(openssl rand -base64 32)"
+  printf 'PAYMENT_CHECK_CLIENT_SECRET=%s\n'    "$(openssl rand -base64 32)"
+} > .env
 ```
 
-Changing the value re-keys the cache, so the next lookup of every address goes to Nominatim until the cache re-warms
-(see *Pepper rotation* in [`geo-scoring/design.md`](geo-scoring/design.md)).
+| Variable | Read by | Purpose |
+|---|---|---|
+| `GEOCODING_CACHE_HMAC_SECRET` | geo-scoring | HMAC-SHA256 pepper for the geocoding cache keys |
+| `ENROLLMENT_LOGIN_CLIENT_SECRET` | gateway, authorization-server | Secret of the OIDC login client `enrollment-login-client` |
+| `PAYMENT_CHECK_CLIENT_SECRET` | gateway, authorization-server | Secret of the `client_credentials` client `payment-check-client` |
+
+Geo-scoring and the authorization-server do not start without their secrets. The gateway starts, but login and the
+payment check fail with `invalid_client` until its two secrets match the authorization-server's.
+
+Changing a value after first use:
+
+- **Pepper:** the same address now produces a different cache key, so no existing entry is found again. Each address
+  goes to Nominatim once more and is cached under its new key; the old entries expire with their TTL (see
+  *Pepper rotation* in [`geo-scoring/design.md`](geo-scoring/design.md)).
+- **Client secrets:** the authorization-server writes them to Postgres when it first registers the clients and does not
+  update them afterwards. Delete the stored clients, then restart the authorization-server:
+
+  ```bash
+  docker compose exec postgres psql -U postgres -d enrollmenthub -c \
+    "DELETE FROM authorization_server.oauth2_registered_client WHERE client_id IN ('enrollment-login-client', 'payment-check-client');"
+  ```
 
 **2. Start infrastructure** (PostgreSQL, RabbitMQ, Redis, Nominatim, libpostal):
 
@@ -221,8 +243,8 @@ docker compose up -d
 docker compose -f otel-local/docker-compose.yml up -d
 ```
 
-**4. Run the services** (each in its own shell, or from the IDE). Maven does not read `.env`; export it into the
-shell that runs geo-scoring, or add it to the IDE run configuration's environment:
+**4. Run the services** (each in its own shell, or from the IDE). Maven does not read `.env`; export it in every
+shell that runs a service, or add it to the IDE run configuration's environment:
 
 ```bash
 set -a; source .env; set +a

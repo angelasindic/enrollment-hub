@@ -67,8 +67,8 @@ curl -X POST http://localhost:9000/payment-check/credit-card \
 | Env var                          | Default                          | Purpose                                                                          |
 |----------------------------------|----------------------------------|----------------------------------------------------------------------------------|
 | `IDP_ISSUER_URI`                 | `http://localhost:9000`          | authorization-server base URI, used to build the explicit provider endpoint URLs |
-| `PAYMENT_CHECK_CLIENT_SECRET`    | `payment-check-client-secret `   | payment-check (M2M) client secret (must match the authorization-server registration)       |
-| `ENROLLMENT_LOGIN_CLIENT_SECRET` | `enrollment-login-client-secret` | OAuth2 login secret (must match the authorization-server registration)           |
+| `PAYMENT_CHECK_CLIENT_SECRET`    | *(required)*                     | payment-check (M2M) client secret (must match the authorization-server registration)       |
+| `ENROLLMENT_LOGIN_CLIENT_SECRET` | *(required)*                     | OAuth2 login secret (must match the authorization-server registration)           |
 | `DECISION_ENGINE_HOST`           | `localhost`                      | downstream resource-server host                                                  |
 
 The provider endpoints are configured explicitly rather than through Spring's discovery-based `issuer-uri` property, so the gateway boots even when the authorization-server is momentarily unavailable.
