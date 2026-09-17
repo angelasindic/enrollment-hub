@@ -188,6 +188,6 @@ docker compose down          # keep volumes (Nominatim import survives)
   browser after the interactive login — the OIDC `authorization_code` form login can't be scripted
   cleanly with curl. The DevTools-console approach avoids that.
 - **Credentials and IDs** (sandbox only): user `user` / `password`; login client
-  `enrollment-login-client` / `enrollment-login-client-secret`; payment-check (M2M) client
-  `payment-check-client` / `payment-check-client-secret`; scopes `enrollment:write` (login) and
+  `enrollment-login-client` and payment-check (M2M) client `payment-check-client`, with their secrets in
+  `.env` (`ENROLLMENT_LOGIN_CLIENT_SECRET`, `PAYMENT_CHECK_CLIENT_SECRET`); scopes `enrollment:write` (login) and
   `prerequisite:issue` (payment-check).

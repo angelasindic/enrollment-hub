@@ -67,7 +67,8 @@ The cache TTL is a purely technical decision (no external ToS constraints — AD
 and freshness trade-offs alone. A cache hit means "we've geocoded this address before," not "this enrollment has been
 scored."
 
-**Pepper rotation** — rotating `GEOCODING_CACHE_HMAC_SECRET` re-keys every entry, so the cache goes cold: each
+**Pepper rotation** — rotating `GEOCODING_CACHE_HMAC_SECRET` changes the key every address maps to, so no existing
+entry is found again and the cache goes cold: each
 enrollment pays one Nominatim round-trip (~50–200 ms instead of ~1 ms) until the cache re-warms, and the orphaned
 entries expire via TTL. This is the same state as initial deployment. Lookups arrive at enrollment rate through the
 AMQP listener — a cold cache makes each one a miss but multiplies nothing — and the self-hosted Nominatim absorbs

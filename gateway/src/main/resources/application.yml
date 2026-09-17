@@ -19,11 +19,13 @@ spring:
             jwk-set-uri: ${IDP_ISSUER_URI:http://localhost:9000}/oauth2/jwks
             user-info-uri: ${IDP_ISSUER_URI:http://localhost:9000}/userinfo
             user-name-attribute: sub
+        # Client secrets have no default; they come from .env (README, Running locally) and must
+        # match the authorization-server's registrations.
         registration:
           enrollment-gateway:
             provider: spring-authorization-server
             client-id: enrollment-login-client
-            client-secret: ${ENROLLMENT_LOGIN_CLIENT_SECRET:enrollment-login-client-secret}
+            client-secret: ${ENROLLMENT_LOGIN_CLIENT_SECRET}
             authorization-grant-type: authorization_code
             redirect-uri: "http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway"
             scope:
@@ -36,7 +38,7 @@ spring:
           payment-check:
             provider: spring-authorization-server
             client-id: payment-check-client
-            client-secret: ${PAYMENT_CHECK_CLIENT_SECRET:payment-check-client-secret}
+            client-secret: ${PAYMENT_CHECK_CLIENT_SECRET}
             authorization-grant-type: client_credentials
             scope:
               - prerequisite:issue

@@ -68,7 +68,7 @@ of that name.
 | Control | Where | Pinned by | Argued in | Status |
 |---|---|---|---|---|
 | Key material and environment files are ignored by git | `.gitignore` | none | none | Implemented |
-| Credentials at rest in the authorization server go through a delegating encoder; the seeded user password is `{bcrypt}` | `SecurityConfiguration` (authorization-server) | none | Class javadoc | The two OAuth client secrets are stored `{noop}` and carry local defaults in the gateway `application.yml`; both must be overridden outside the local stack |
+| Credentials at rest in the authorization server go through a delegating encoder; the seeded user password is `{bcrypt}` | `SecurityConfiguration` (authorization-server) | none | Class javadoc | The two OAuth client secrets are stored `{noop}`; they have no defaults and are supplied through the environment (`.env` locally) |
 | GitHub Actions pinned to commit SHAs, with least-privilege `permissions` | `.github/workflows/ci.yml` | none | none | Implemented |
 | Dependencies watched across Maven, npm and Actions | `.github/dependabot.yml` | none | none | Implemented |
 | Test infrastructure images pinned to digests | `BaseIntegrationTest` in each module | the integration suites themselves | Class javadoc | Implemented. The `otel-local` stack uses `latest` tags |
