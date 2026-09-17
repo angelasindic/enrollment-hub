@@ -28,6 +28,10 @@ public abstract class BaseIntegrationTest {
                     // URL, so the unqualified SQL from the SAS Jdbc services + JdbcUserDetailsManager resolves.
                     .withUrlParam("currentSchema", "authorization_server");
 
+    // The client secrets have no default in production config; the seeder registers these values.
+    protected static final String LOGIN_CLIENT_SECRET = "enrollment-login-client-secret";
+    protected static final String PAYMENT_CHECK_CLIENT_SECRET = "payment-check-client-secret";
+
     static {
         POSTGRES.start();
     }
@@ -37,5 +41,7 @@ public abstract class BaseIntegrationTest {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("ENROLLMENT_LOGIN_CLIENT_SECRET", () -> LOGIN_CLIENT_SECRET);
+        registry.add("PAYMENT_CHECK_CLIENT_SECRET", () -> PAYMENT_CHECK_CLIENT_SECRET);
     }
 }

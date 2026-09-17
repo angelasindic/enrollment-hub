@@ -42,6 +42,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.util.Assert;
 
 import javax.sql.DataSource;
 import java.security.KeyPair;
@@ -152,13 +153,17 @@ public class SecurityConfiguration {
     /**
      * Seeds the enrollment login and payment check client (the enrollment-hub gateway on :8079) into the persistent
      * repository on startup if absent. Idempotent across restarts; the DB row is the source of truth.
-     * Secrets are externalized via {@code PAYMENT_CHECK_CLIENT_SECRET} and  {@code ENROLLMENT_LOGIN_CLIENT_SECRET}
+     * Secrets come from {@code ENROLLMENT_LOGIN_CLIENT_SECRET} and {@code PAYMENT_CHECK_CLIENT_SECRET} and have
+     * no default. They are read only when a client is first seeded, so changing one later requires deleting
+     * the stored row.
      */
     @Bean
     public ApplicationRunner registeredClientSeeder(
             RegisteredClientRepository registeredClientRepository,
-            @Value("${ENROLLMENT_LOGIN_CLIENT_SECRET:enrollment-login-client-secret}") String loginSecret,
-            @Value("${PAYMENT_CHECK_CLIENT_SECRET:payment-check-client-secret}") String paymentCheckSecret) {
+            @Value("${ENROLLMENT_LOGIN_CLIENT_SECRET}") String loginSecret,
+            @Value("${PAYMENT_CHECK_CLIENT_SECRET}") String paymentCheckSecret) {
+        Assert.hasText(loginSecret, "ENROLLMENT_LOGIN_CLIENT_SECRET must not be blank");
+        Assert.hasText(paymentCheckSecret, "PAYMENT_CHECK_CLIENT_SECRET must not be blank");
         return args -> {
             if (registeredClientRepository.findByClientId("enrollment-login-client") == null) {
                 registeredClientRepository.save(loginClient(loginSecret));

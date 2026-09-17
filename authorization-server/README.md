@@ -36,11 +36,11 @@ The credit-card route requires a signed `credit_card_check` attestation before a
 - `POST /payment-check/credit-card` mints the attestation. It requires a `client_credentials` access token with scope `prerequisite:issue` and a `{"subject":"<user>"}` body. The token carries `iss=http://localhost:9000/payment-check`, `aud=enrollment-api`, claim `type=credit_card_check`, RS256, 10-minute TTL.
 - `GET /payment-check/jwks` publishes the verification key (distinct from `/oauth2/jwks`); the decision-engine validates against it.
 
-In the normal flow the gateway calls this server-to-server and holds the JWT in the user's session (BFF custody — see the [gateway README](../gateway/README.md)). To mint one directly for local testing:
+In the normal flow the gateway calls this server-to-server and holds the JWT in the user's session (BFF custody — see the [gateway README](../gateway/README.md)). To mint one directly for local testing, with `.env` exported into the shell:
 
 ```
 # 1) client_credentials token carrying the issue scope
-TOKEN=$(curl -s -u payment-check-client:payment-check-client-secret \
+TOKEN=$(curl -s -u "payment-check-client:$PAYMENT_CHECK_CLIENT_SECRET" \
   -d grant_type=client_credentials -d scope=prerequisite:issue \
   http://localhost:9000/oauth2/token | jq -r .access_token)
 
@@ -65,11 +65,14 @@ Token validation does not yet share this property. The RSA signing key is regene
 
 | Env var                          | Default                          | Purpose                                                             |
 |----------------------------------|----------------------------------|---------------------------------------------------------------------|
-| `PAYMENT_CHECK_CLIENT_SECRET`    | `payment-check-client-secret `   | payment-check (M2M) client secret (must match the gateway)                    |
-| `ENROLLMENT_LOGIN_CLIENT_SECRET` | `enrollment-login-client-secret` | OAuth2 login secret (must match the gateway)                        |
+| `PAYMENT_CHECK_CLIENT_SECRET`    | *(required)*                     | payment-check (M2M) client secret (must match the gateway)                    |
+| `ENROLLMENT_LOGIN_CLIENT_SECRET` | *(required)*                     | OAuth2 login secret (must match the gateway)                        |
 | `DB_HOST`                        | `localhost`                      | PostgreSQL host (`enrollmenthub` DB, `authorization_server` schema) |
 | `DB_USER`                        | `postgres`                       | datasource username                                                 |
 | `DB_PASSWORD`                    | `postgres`                       | datasource password                                                 |
+
+The client secrets are written to `oauth2_registered_client` only when a client is first seeded. After changing
+one, delete that client's row and restart the service.
 
 > **Sandbox only:** the demo user (username `user`, password `password`), the `{noop}` client secret, and the per-startup RSA signing key are not production-grade. A persistent signing key (keystore) and a real user store or identity federation remain deferred (ADR-05).
 

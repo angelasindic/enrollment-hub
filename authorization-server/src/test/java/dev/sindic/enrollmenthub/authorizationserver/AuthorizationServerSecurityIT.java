@@ -47,7 +47,7 @@ class AuthorizationServerSecurityIT extends BaseIntegrationTest {
         mockMvc.perform(post("/oauth2/token")
                         .param("grant_type", "client_credentials")
                         .param("scope", "enrollment:write")
-                        .with(httpBasic("payment-check-client", "payment-check-client-secret")))
+                        .with(httpBasic("payment-check-client", PAYMENT_CHECK_CLIENT_SECRET)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_scope"));
     }
@@ -59,7 +59,7 @@ class AuthorizationServerSecurityIT extends BaseIntegrationTest {
         mockMvc.perform(post("/oauth2/token")
                         .param("grant_type", "client_credentials")
                         .param("scope", "enrollment:write")
-                        .with(httpBasic("enrollment-login-client", "enrollment-login-client-secret")))
+                        .with(httpBasic("enrollment-login-client", LOGIN_CLIENT_SECRET)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("unauthorized_client"));
     }
