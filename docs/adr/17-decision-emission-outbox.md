@@ -69,7 +69,7 @@ The producer guarantee (commit-first plus relay) and consumer idempotency are co
 
 ## Ingress / egress asymmetry
 
-This ADR uses a transactional outbox at egress although ADR-13 inverts the intake queue at ingress rather than using one. The difference turns on where the intent originates. At ingress the intent *arrives as a message*, so the broker already makes it durable and the published-first artifact is a command that re-executes idempotently to the same effect. At egress the intent is *born inside a DB transaction* with no upstream message, and the published-first artifact would be a verdict that re-derivation can change. Inputs are safe to publish before commit; outputs are not. ADR-13 §Ingress Inversion states the same asymmetry from the ingress side.
+This ADR uses a transactional outbox at egress although ADR-13 inverts the intake queue at ingress rather than using one. The difference turns on where the intent originates. At ingress the intent *arrives as a message*, so the broker already makes it durable and the published-first artifact is a command that re-executes idempotently to the same effect. At egress the intent is *born inside a DB transaction* with no upstream message, and the published-first artifact would be a verdict that re-derivation can change. Inputs are safe to publish before commit; outputs are not. ADR-13 §Ingress / egress asymmetry states the same asymmetry from the ingress side.
 
 ## Compliance rationale
 

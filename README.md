@@ -184,9 +184,9 @@ The core pipeline, security perimeter, and observability are implemented. A few 
 
 | Document | What it covers |
 |---|---|
-| [Architecture Document](docs/architecture.md) | System design, C4 component model, scatter-gather topology, ADR log, observability strategy, GDPR posture, and operational decisions |
+| [Architecture Document](docs/architecture.md) | System design, C4 component model, scatter-gather topology, observability strategy, GDPR posture, and operational decisions |
 | [Geo-Scoring Business Analysis](docs/geo_scoring_business_analysis.md) | The synthetic-identity fraud pattern, the gap in existing defences, the geo-temporal clustering rationale, and the phased rollout strategy |
-| [Architecture Decision Records](docs/adr) | The dense decision log — every non-trivial choice, with context, options, trade-offs, and triggers to reconsider |
+| [Architecture Decision Records](docs/adr) | The dense decision log with an [index](docs/adr/README.md) of one-line decisions — every non-trivial choice, with context, options, trade-offs, and triggers to reconsider |
 | [DLQ replay runbook](docs/runbook-dlq-replay.md) | The operational procedure behind the `DlqNonEmpty` alert — inspect, classify, replay, or discard |
 | [Security controls](docs/security-controls.md) | Control-by-control map — where each is implemented, the test that pins it, the document that argues it, and what is not implemented |
 
