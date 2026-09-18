@@ -43,6 +43,10 @@ The prerequisite gates do not participate in the scatter-gather. Both are synchr
 
 **Rationale.** Scoring and best-effort checks are probabilistic inputs whose absence does not imply fraud, so blocking legitimate accounts during a transient outage is disproportionate. Prerequisite gates are legal and compliance requirements that must hold before any pipeline starts, so their absence is an unresolved precondition rather than a missing signal. Approving fail-open on a prerequisite gate would bypass the requirement the gate exists to enforce.
 
+### Fail-open annotation
+
+A fail-open decision carries the normal outcome for the signals that answered; nothing on the decision itself marks it as degraded. The missing signal is published and persisted with its own account of why it is missing. A signal that never replied before the deadline settles as `NOT_EXECUTED` with a reason. A signal whose service ran and could not produce a value settles with no outcome and a reason. A consumer distinguishes the two from the signal entry itself, and the persisted signal map preserves the same distinction for after-the-fact inspection (ADR-14). The aggregate view is the `decisionengine_signal_settled_total` counter and the `SignalFailingOpen` rule under Consequences.
+
 **Doesn't solve.** Fraud that completes within the deadline and returns clean. Late results that arrive after the decision is emitted, where post-decision compensation is out of scope and the late result is discarded (ADR-16, ADR-17).
 
 **Trade-off.** Fail-open on scoring signals accepts a bounded fraud-exposure window during degradation. At the current volume (≤50,000 accounts/day) with independent failure isolation, sustained outages are expected to be infrequent and short. Fail-closed on a prerequisite gate accepts customer friction during provider degradation: affected applicants resubmit on recovery.
@@ -53,7 +57,7 @@ The prerequisite gates do not participate in the scatter-gather. Both are synchr
 
 ### Triggers to reconsider
 
-- **Broker-native TTL** if the polling job becomes a measurable bottleneck, that is, timeout transitions lag the deadlines under sustained load. Not a concern at ≤5 RPS peak; revisit at ≥50 RPS sustained (ADR-13; architecture §1.4).
+- **Broker-native TTL** if the polling job becomes a measurable bottleneck, that is, timeout transitions lag the deadlines under sustained load. Not a concern at ≤5 RPS peak; revisit at ≥50 RPS sustained (ADR-13; architecture §1.3).
 - **Fail-closed on scoring signals** if post-launch analysis shows timed-out signals correlate with fraud at a significant rate, suggesting availability attacks that suppress scoring.
 - **Queued retry instead of immediate rejection on prerequisite gates** if regulation requires that verification failure during a provider outage never yields an approval.
 
