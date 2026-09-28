@@ -2,6 +2,6 @@
   "name": "ci-scripts",
   "private": true,
   "devDependencies": {
-    "tsx": "4.23.13"
+    "tsx": "4.23.15"
   }
 }
