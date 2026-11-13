@@ -21,7 +21,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * server-to-server attestation fetch and stores the resulting JWT in the session; unauthenticated
  * calls are redirected to login.
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "ENROLLMENT_LOGIN_CLIENT_SECRET=test-login-secret",
+        "PAYMENT_CHECK_CLIENT_SECRET=test-payment-check-secret"})
 @AutoConfigureMockMvc
 class PaymentCheckControllerIT {
 

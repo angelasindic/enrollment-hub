@@ -15,11 +15,12 @@ const filterContracts = process.env.FILTER_CONTRACTS === 'true';
 const filterAuth      = process.env.FILTER_AUTHORIZATION_SERVER === 'true';
 const filterGeo       = process.env.FILTER_GEO_SCORING === 'true';
 const filterFraud     = process.env.FILTER_FRAUD_DETECTION === 'true';
+const filterAccount   = process.env.FILTER_ACCOUNT_SERVICE === 'true';
 const filterDecision  = process.env.FILTER_DECISION_ENGINE === 'true';
 const filterGateway   = process.env.FILTER_GATEWAY === 'true';
 
 const eventName  = process.env.GITHUB_EVENT_NAME ?? 'push';
-const allModules = ['contracts', 'authorization-server', 'geo-scoring', 'fraud-detection', 'decision-engine', 'gateway'] as const;
+const allModules = ['contracts', 'authorization-server', 'geo-scoring', 'fraud-detection', 'account-service', 'decision-engine', 'gateway'] as const;
 
 let changed: string[];
 
@@ -30,6 +31,7 @@ if (eventName === 'workflow_dispatch' || filterContracts) {
   if (filterAuth)     changed.push('authorization-server');
   if (filterGeo)      changed.push('geo-scoring');
   if (filterFraud)    changed.push('fraud-detection');
+  if (filterAccount)  changed.push('account-service');
   if (filterDecision) changed.push('decision-engine');
   if (filterGateway)  changed.push('gateway');
 }

@@ -20,7 +20,7 @@ unreliable downstream services.**
 | **Stack** | JDK 25 (virtual threads) · Spring Boot 4 · Spring Security 7 · PostgreSQL · RabbitMQ · Redis · Nominatim · libpostal |
 | **Design driver** | **Latency isolation**, not throughput — applicant latency stays flat while downstream services run P99 >1s at <100% availability |
 | **Observability** | OpenTelemetry traces + logs, Prometheus metrics, Grafana — one distributed trace per enrollment across every queue hop |
-| **Status** | Reference implementation. Core pipeline, security perimeter, decision outbox, and observability working; Account-Service consumer and eIDAS/INVOICE prerequisite planned |
+| **Status** | Reference implementation. Core pipeline, security perimeter, decision outbox, and observability working; account provisioning and eIDAS/INVOICE prerequisite planned |
 
 ![System Context — Enrollment Hub](docs/structurizr/images/EnrollmentHubContext.png "System Context — Enrollment Hub")
 
@@ -60,6 +60,7 @@ clustering.
 | [`decision-engine`](decision-engine) | The orchestrator — OAuth2 resource server, scatter-gather over RabbitMQ, correlation store, signal aggregation, timeout policy, and the transactional-outbox decision emission. |
 | [`geo-scoring`](geo-scoring) | Synthetic-identity fraud signal — libpostal normalisation, Nominatim geocoding, atomic Redis Lua density check over configurable radii. |
 | [`fraud-detection`](fraud-detection) | `BEST_EFFORT` fraud signal (stub) — consumes `FraudCheckRequest`, replies `OK`; the extension seam for a real service. |
+| [`account-service`](account-service) | Downstream decision consumer (stub) — owns the decision queue and its DLQ, deduplicates on `decisionId`, logs; provisions nothing. |
 | [`contracts`](contracts) | Shared event/DTO records — the producer-owned message contract between services. |
 
 ---
@@ -136,6 +137,12 @@ is issued under a distinct trust root and validated conditionally on the CREDIT_
 
 ---
 
+## What I'd Do Differently
+
+- **Design for demonstrability from the start (ADR-09).** Self-hosted Nominatim was the right geocoder, and I would choose it again: a hosted API would receive every applicant address and become a GDPR processor, for a US provider with a third-country transfer on top, while self-hosting keeps addresses inside the hub's boundary. What I underestimated was its weight outside the request path. An OSM extract has to be imported into a second PostgreSQL before the first address resolves, which makes the stack slow to start and heavy to host for anyone who only wants to see it work. The result is that readers of this repository see the design but not the running system. Today I would add a `demo` profile on day one: a single-city extract, or a fixture geocoder behind the existing `GeocodingProvider` seam that resolves the demo scenario's addresses from a file, so the whole pipeline runs on one small server.
+
+---
+
 ## Implementation status
 
 The core pipeline, security perimeter, and observability are implemented. A few items are deliberately scoped out.
@@ -156,7 +163,7 @@ The core pipeline, security perimeter, and observability are implemented. A few 
 - Observability — one distributed trace per enrollment across every queue hop (OpenTelemetry), Prometheus metrics with DLQ / publish-failure / stuck-outbox alerts, Grafana across traces, logs, and metrics
 
 **Not yet implemented (by design):**
-- Account Service consumer — `EnrollmentDecisionEvent` is published but no downstream consumer is built
+- Account provisioning — the `account-service` stub consumes `EnrollmentDecisionEvent` idempotently but creates no account
 - eIDAS / INVOICE prerequisite (`eidas_identity`) — same shape as the credit-card check with a second issuer; deferred (ADR-19)
 
 ---
@@ -196,64 +203,9 @@ Each service also carries its own `design.md` / `README.md` describing its inter
 
 ## Running locally
 
-Services run on the host against Docker Compose infrastructure.
-
-**1. Create `.env`** with the secrets listed in `.env.example`. None has a default; each value is 32 random bytes,
-base64-encoded:
-
-```bash
-{
-  printf 'GEOCODING_CACHE_HMAC_SECRET=%s\n'    "$(openssl rand -base64 32)"
-  printf 'ENROLLMENT_LOGIN_CLIENT_SECRET=%s\n' "$(openssl rand -base64 32)"
-  printf 'PAYMENT_CHECK_CLIENT_SECRET=%s\n'    "$(openssl rand -base64 32)"
-} > .env
-```
-
-| Variable | Read by | Purpose |
-|---|---|---|
-| `GEOCODING_CACHE_HMAC_SECRET` | geo-scoring | HMAC-SHA256 pepper for the geocoding cache keys |
-| `ENROLLMENT_LOGIN_CLIENT_SECRET` | gateway, authorization-server | Secret of the OIDC login client `enrollment-login-client` |
-| `PAYMENT_CHECK_CLIENT_SECRET` | gateway, authorization-server | Secret of the `client_credentials` client `payment-check-client` |
-
-Geo-scoring and the authorization-server do not start without their secrets. The gateway starts, but login and the
-payment check fail with `invalid_client` until its two secrets match the authorization-server's.
-
-Changing a value after first use:
-
-- **Pepper:** the same address now produces a different cache key, so no existing entry is found again. Each address
-  goes to Nominatim once more and is cached under its new key; the old entries expire with their TTL (see
-  *Pepper rotation* in [`geo-scoring/design.md`](geo-scoring/design.md)).
-- **Client secrets:** the authorization-server writes them to Postgres when it first registers the clients and does not
-  update them afterwards. Delete the stored clients, then restart the authorization-server:
-
-  ```bash
-  docker compose exec postgres psql -U postgres -d enrollmenthub -c \
-    "DELETE FROM authorization_server.oauth2_registered_client WHERE client_id IN ('enrollment-login-client', 'payment-check-client');"
-  ```
-
-**2. Start infrastructure** (PostgreSQL, RabbitMQ, Redis, Nominatim, libpostal):
-
-```bash
-docker compose up -d
-```
-
-**3. (Optional) Start the observability stack** (OTel Collector, Tempo, Loki, Prometheus, Grafana at `localhost:3000`):
-
-```bash
-docker compose -f otel-local/docker-compose.yml up -d
-```
-
-**4. Run the services** (each in its own shell, or from the IDE). Maven does not read `.env`; export it in every
-shell that runs a service, or add it to the IDE run configuration's environment:
-
-```bash
-set -a; source .env; set +a
-./mvnw -pl authorization-server spring-boot:run
-./mvnw -pl decision-engine     spring-boot:run
-./mvnw -pl geo-scoring         spring-boot:run
-./mvnw -pl fraud-detection     spring-boot:run
-./mvnw -pl gateway             spring-boot:run
-```
+Services run on the host against Docker Compose infrastructure. [Running locally and manual end-to-end
+test](docs/e2e-manual-test.md) covers the setup — secrets in `.env`, infrastructure, the optional observability
+stack, service start order — and then drives an enrollment through the whole chain.
 
 **Tests** manage their own infrastructure via Testcontainers — no running Docker Compose instance is needed:
 

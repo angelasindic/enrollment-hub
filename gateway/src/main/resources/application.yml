@@ -19,7 +19,7 @@ spring:
             jwk-set-uri: ${IDP_ISSUER_URI:http://localhost:9000}/oauth2/jwks
             user-info-uri: ${IDP_ISSUER_URI:http://localhost:9000}/userinfo
             user-name-attribute: sub
-        # Client secrets have no default; they come from .env (README, Running locally) and must
+        # Client secrets have no default; they come from the environment (.env locally) and must
         # match the authorization-server's registrations.
         registration:
           enrollment-gateway:

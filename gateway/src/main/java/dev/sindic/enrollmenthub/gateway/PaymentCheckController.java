@@ -1,6 +1,8 @@
 package dev.sindic.enrollmenthub.gateway;
 
 import jakarta.servlet.http.HttpSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
@@ -20,6 +22,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class PaymentCheckController {
 
+    private static final Logger log = LoggerFactory.getLogger(PaymentCheckController.class);
+
     /** Session attribute holding the credit-card-check JWT until the enrollment request. */
     public static final String PREREQUISITE_TOKEN_ATTRIBUTE =
             PaymentCheckController.class.getName() + ".PREREQUISITE_TOKEN";
@@ -34,6 +38,7 @@ public class PaymentCheckController {
     public ResponseEntity<Void> creditCardCheck(@AuthenticationPrincipal OidcUser user, HttpSession session) {
         String attestation = paymentCheckClient.issueCreditCardCheck(user.getSubject());
         session.setAttribute(PREREQUISITE_TOKEN_ATTRIBUTE, attestation);
+        log.info("Payment check completed; credit-card-check attestation stored in session");
         return ResponseEntity.noContent().build();
     }
 }

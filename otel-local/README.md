@@ -29,7 +29,7 @@ The stack is optional: the services start and run without it (OTLP export failur
 | URL | Service | What you do there |
 |---|---|---|
 | <http://localhost:3000> | **Grafana** | The one UI you normally need. Anonymous access, Admin role, no login form. **Explore → Tempo** to search traces, **Explore → Loki** to query logs, **Explore → Prometheus** for ad-hoc metric queries. |
-| <http://localhost:9090> | **Prometheus** | Scrape status under *Status → Targets* (one job per service: gateway :8079, authorization-server :9000, decision-engine :8080, geo-scoring :8081, fraud-detection :8082); alert rules and their state under *Alerts*. |
+| <http://localhost:9090> | **Prometheus** | Scrape status under *Status → Targets* (one job per service: gateway :8079, authorization-server :9000, decision-engine :8080, geo-scoring :8081, fraud-detection :8082, account-service :8083); alert rules and their state under *Alerts*. |
 | <http://localhost:3200> | Tempo | HTTP API only — no UI. Queried through Grafana. |
 | <http://localhost:3100> | Loki | HTTP API only — no UI. Queried through Grafana. |
 | `localhost:4318` / `localhost:4317` | OTel Collector | OTLP ingest (HTTP / gRPC) — the endpoint the services push to; nothing to open in a browser. |

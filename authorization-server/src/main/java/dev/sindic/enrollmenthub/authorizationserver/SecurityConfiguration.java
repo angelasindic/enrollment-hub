@@ -40,6 +40,7 @@ import org.springframework.security.oauth2.server.authorization.token.OAuth2Toke
 import org.springframework.security.provisioning.JdbcUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.LoginUrlAuthenticationEntryPoint;
+import org.springframework.security.web.savedrequest.HttpSessionRequestCache;
 import org.springframework.security.web.util.matcher.MediaTypeRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.util.Assert;
@@ -49,7 +50,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
-import java.util.List;
+import java.util.Collections;
 import java.util.UUID;
 
 /**
@@ -97,15 +98,24 @@ public class SecurityConfiguration {
     /**
      * Application security: renders the login form and authenticates the end user before the
      * authorization_code flow proceeds. Actuator health is left open for orchestration probes.
+     * <p>
+     * The session holds a single saved request, the target the login success handler redirects to.
+     * Only the authorization-endpoint chain above may set it; this chain reads it but never saves,
+     * so a stray browser request during login (e.g. Chrome DevTools' {@code /.well-known/appspecific}
+     * probe) cannot replace the pending {@code /oauth2/authorize} request.
      */
     @Bean
     @Order(2)
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
+        HttpSessionRequestCache requestCache = new HttpSessionRequestCache();
+        requestCache.setRequestMatcher((request) -> false);
+
         http
                 .authorizeHttpRequests((authorize) -> authorize
                         .requestMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
                         .anyRequest().authenticated()
                 )
+                .requestCache((cache) -> cache.requestCache(requestCache))
                 .formLogin(Customizer.withDefaults());
 
         return http.build();
@@ -214,7 +224,10 @@ public class SecurityConfiguration {
         return context -> {
             if (OAuth2TokenType.ACCESS_TOKEN.equals(context.getTokenType())
                     && context.getAuthorizedScopes().contains("enrollment:write")) {
-                context.getClaims().audience(List.of("enrollment-api"));
+                // singletonList, as SAS uses for its default aud: the claims are persisted with the
+                // authorization, and the JDBC service's Jackson allowlist rejects List.of's JDK-internal
+                // type when /userinfo reloads it.
+                context.getClaims().audience(Collections.singletonList("enrollment-api"));
             }
         };
     }
