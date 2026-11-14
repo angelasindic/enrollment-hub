@@ -39,7 +39,8 @@ against a bounded in-memory set of recently seen ids (`account-service.dedup-cap
 under a unique constraint in the transaction that creates the account.
 
 The listener retries 3× with exponential backoff; on exhaustion the message dead-letters to
-`account-service.decisions.queue.dlq`.
+`account-service.decisions.queue.dlq`. A message that cannot be deserialized is not retried and
+dead-letters on the first throw.
 
 The enrollment snapshot in the event carries personal data and is not logged.
 

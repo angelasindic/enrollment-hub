@@ -98,7 +98,9 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
                 .setContentType(MessageProperties.CONTENT_TYPE_JSON).build();
         rabbitTemplate.send(REQUEST_EXCHANGE, GEO_KEY, poison);
 
-        await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+        // Well inside the 7 s the retry backoff adds up to (1 s + 2 s + 4 s): a message that
+        // cannot be converted is dead-lettered on the first throw.
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             var dlqMessage = rabbitTemplate.receive(REQUEST_DLQ, 100);
             assertThat(dlqMessage).isNotNull();
             assertThat(new String(dlqMessage.getBody())).contains("garbage");

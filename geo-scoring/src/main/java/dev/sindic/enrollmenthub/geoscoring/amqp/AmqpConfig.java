@@ -11,12 +11,16 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.amqp.support.converter.MessageConversionException;
 import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.task.VirtualThreadTaskExecutor;
 import tools.jackson.databind.json.JsonMapper;
+
+import java.time.Duration;
 
 @Slf4j
 @Configuration
@@ -157,10 +161,27 @@ class AmqpConfig {
         factory.setMaxConcurrentConsumers(MAX_CONCURRENT_CONSUMERS);
         factory.setObservationEnabled(true);
         factory.setAdviceChain(RetryInterceptorBuilder.stateless()
-                .maxRetries(MAX_RETRIES)
-                .backOffOptions(INITIAL_INTERVAL, MULTIPLIER, MAX_INTERVAL)
+                .retryPolicy(listenerRetryPolicy())
                 .recoverer(new RejectAndDontRequeueRecoverer())
                 .build());
         return factory;
+    }
+
+    /**
+     * Exponential backoff over {@link #MAX_RETRIES} attempts for {@code @RabbitListener}
+     * invocations, excluding {@link MessageConversionException}: bytes that are not a valid message
+     * of the expected type (a contract's own constructor rejecting them surfaces here, wrapped). A
+     * redelivery brings the same bytes, so such a message goes to the DLQ on the first throw
+     * instead of holding its consumer for the whole backoff. Package-private for focused unit
+     * tests.
+     */
+    static RetryPolicy listenerRetryPolicy() {
+        return RetryPolicy.builder()
+                .maxRetries(MAX_RETRIES)
+                .delay(Duration.ofMillis(INITIAL_INTERVAL))
+                .multiplier(MULTIPLIER)
+                .maxDelay(Duration.ofMillis(MAX_INTERVAL))
+                .excludes(MessageConversionException.class)
+                .build();
     }
 }

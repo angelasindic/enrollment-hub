@@ -6,8 +6,10 @@ alert identifies which DLQ.
 
 A message reaches a DLQ in exactly two ways (ADR-13 §Delivery & Concurrency Guarantees):
 the listener retry budget was exhausted (3 attempts, exponential backoff), or the failure was
-classified non-retryable and routed on the first throw — currently only
-`UnknownCorrelationException`, a signal result whose `enrollmentId` has no correlation row.
+classified non-retryable and routed on the first throw. Every consumer classifies a message
+that cannot be deserialized (`MessageConversionException`) that way. The decision-engine adds
+`UnknownCorrelationException`, a signal result whose `enrollmentId` has no correlation row, and
+`SignalShapeMismatchException`, a signal reporting a state its classification cannot use.
 Nothing is discarded automatically; the DLQ is the containment point, and this runbook is the
 manual half of that contract.
 

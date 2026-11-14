@@ -64,3 +64,7 @@ id_ecdsa
 id_ed25519
 .netrc
 .npmrc
+
+
+# not yet
+ .gitlab-ci.yml

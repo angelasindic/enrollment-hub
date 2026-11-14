@@ -32,7 +32,8 @@ exchange it publishes to (idempotently; the decision-engine also declares it).
 ## Delivery semantics
 
 At-least-once + idempotent receiver (architecture.md §8.7). The listener retries 3× with exponential
-backoff; on exhaustion the message dead-letters to `fraud.detection.requests.queue.dlq`. Publishes use
+backoff; on exhaustion the message dead-letters to `fraud.detection.requests.queue.dlq`. A message that
+cannot be deserialized is not retried and dead-letters on the first throw. Publishes use
 publisher confirms + mandatory routing, surfacing nacks/returns as exceptions
 (`fraud_detection_publish_failures_total`).
 

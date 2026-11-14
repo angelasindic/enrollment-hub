@@ -13,11 +13,15 @@ import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.amqp.support.converter.MessageConversionException;
 import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.task.VirtualThreadTaskExecutor;
 import tools.jackson.databind.json.JsonMapper;
+
+import java.time.Duration;
 
 /**
  * Consumer-side topology for decision events (ADR-13 §Channel Ownership). The decision-engine owns
@@ -97,8 +101,8 @@ class AmqpConfig {
 
     /**
      * Listener container factory with a virtual-thread executor (ADR-04, {@code amqp-account-}
-     * thread-name prefix), exponential-backoff retry, and non-requeueing recovery to the DLQ on
-     * exhaustion.
+     * thread-name prefix), the retry of {@link #listenerRetryPolicy()}, and non-requeueing
+     * recovery to the DLQ once that policy gives up.
      */
     @Bean
     SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
@@ -114,10 +118,27 @@ class AmqpConfig {
         factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-account-"));
         factory.setObservationEnabled(true);
         factory.setAdviceChain(RetryInterceptorBuilder.stateless()
-                .maxRetries(MAX_RETRIES)
-                .backOffOptions(INITIAL_INTERVAL, MULTIPLIER, MAX_INTERVAL)
+                .retryPolicy(listenerRetryPolicy())
                 .recoverer(new RejectAndDontRequeueRecoverer())
                 .build());
         return factory;
+    }
+
+    /**
+     * Exponential backoff over {@link #MAX_RETRIES} attempts for {@code @RabbitListener}
+     * invocations, excluding {@link MessageConversionException}: bytes that are not a valid message
+     * of the expected type (a contract's own constructor rejecting them surfaces here, wrapped). A
+     * redelivery brings the same bytes, so such a message goes to the DLQ on the first throw
+     * instead of holding its consumer for the whole backoff. Package-private for focused unit
+     * tests.
+     */
+    static RetryPolicy listenerRetryPolicy() {
+        return RetryPolicy.builder()
+                .maxRetries(MAX_RETRIES)
+                .delay(Duration.ofMillis(INITIAL_INTERVAL))
+                .multiplier(MULTIPLIER)
+                .maxDelay(Duration.ofMillis(MAX_INTERVAL))
+                .excludes(MessageConversionException.class)
+                .build();
     }
 }
