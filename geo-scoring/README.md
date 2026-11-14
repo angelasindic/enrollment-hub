@@ -14,7 +14,7 @@ Geocoding outcomes split two ways:
   → density check skipped → `GeoScoreResult` with `riskLevel=null` + `noResultReason="geocoding_failed"` emitted
   (decision engine fail-opens per ADR-15).
 - **Transient provider outage** (5xx, transport error, 408/429) → `TransientGeocodingException` propagates → AMQP
-  listener retries (3× with backoff) → on exhaustion the message routes to `geo.scoring.queue.dlq`. Sustained
+  listener retries (3× with backoff) → on exhaustion the message routes to `geo.scoring.requests.queue.dlq`. Sustained
   outages surface as DLQ depth, not as a stream of silent `NO_RESULT`. See `design.md` §Error Handling.
 
 The 48-hour per-member TTL on the geo-index is enforced out of band by `GeoIndexCleanupJob` (see design.md).
