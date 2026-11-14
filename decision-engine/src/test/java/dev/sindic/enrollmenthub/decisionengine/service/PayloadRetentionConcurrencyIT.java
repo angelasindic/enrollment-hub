@@ -1,5 +1,6 @@
 package dev.sindic.enrollmenthub.decisionengine.service;
 
+import dev.sindic.enrollmenthub.contracts.events.EnrollmentDecisionEvent;
 import dev.sindic.enrollmenthub.decisionengine.BaseIntegrationTest;
 import dev.sindic.enrollmenthub.decisionengine.TestEntityFactory;
 import dev.sindic.enrollmenthub.decisionengine.domain.CheckOutcome;
@@ -12,15 +13,20 @@ import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AmqpAdmin;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -31,12 +37,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static dev.sindic.enrollmenthub.decisionengine.amqp.AmqpConfig.DECISION_EXCHANGE;
 import static dev.sindic.enrollmenthub.decisionengine.amqp.AmqpConfig.DECISION_ROUTING_KEY;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Proves that {@link PayloadRetentionJob} and the ADR-17 dispatch path are safe to run at the same
- * time — which they do: {@code spring.threads.virtual.enabled} replaces the single-threaded
- * {@code ThreadPoolTaskScheduler} with a {@code SimpleAsyncTaskScheduler} that has no concurrency
- * limit, so the two {@code @Scheduled} passes are not serialised onto one thread.
+ * time. Within one instance the two {@code @Scheduled} passes do not overlap: both use a fixed
+ * delay, which {@code SimpleAsyncTaskScheduler} runs on its single scheduler thread. Retention
+ * does overlap with the eager dispatch and the late-result handlers on the listener threads, and
+ * with the relay of any other instance.
  *
  * <p>The safety argument is predicate disjointness on {@code dispatched_at}: the stamp is written
  * only after the publisher confirm, every publisher reads the payload from an entity loaded before
@@ -57,6 +65,7 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
     @Autowired EnrollmentRepository repository;
     @Autowired TransactionTemplate txTemplate;
     @Autowired AmqpAdmin amqpAdmin;
+    @Autowired RabbitTemplate rabbitTemplate;
     @Autowired JsonMapper jsonMapper;
 
     private final List<String> declaredQueues = new ArrayList<>();
@@ -109,12 +118,15 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
         // would leave a row the relay can re-claim but not rebuild an event from. Retention runs in
         // a tight loop for the whole of a dispatch batch, so it observes rows on both sides of the
         // dispatched_at transition.
-        bindCaptureQueue();
+        var captureQueue = bindCaptureQueue();
         var ids = new ArrayList<UUID>();
+        var decisionIds = new ArrayList<UUID>();
         for (int i = 0; i < OUTBOX_ROWS; i++) {
             var id = UUID.randomUUID();
-            seedDecided(id, UUID.randomUUID());
+            var decisionId = UUID.randomUUID();
+            seedDecided(id, decisionId);
             ids.add(id);
+            decisionIds.add(decisionId);
         }
 
         var stop = new AtomicBoolean(false);
@@ -125,24 +137,26 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
                     retentionJob.stripDispatchedPayloads();
                 }
             });
-            dispatcher.dispatchPending(OUTBOX_ROWS);
+            // One batch need not cover the 25 rows. The database is shared across IT classes, so the
+            // outbox can hold rows another class left undispatched, and the scheduled sweep runs once
+            // at context start whatever its interval, so its relay can hold some of these rows in
+            // its own transaction. Relay until every seeded row is stamped.
+            await().atMost(Duration.ofSeconds(20)).until(() -> {
+                dispatcher.dispatchPending(OUTBOX_ROWS);
+                return ids.stream().allMatch(id ->
+                        repository.findById(id).orElseThrow().getDispatchedAt() != null);
+            });
         } finally {
             stop.set(true);
             retention.shutdown();
             assertThat(retention.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
         }
 
-        for (var id : ids) {
-            var row = repository.findById(id).orElseThrow();
-            assertThat(row.getDispatchedAt())
-                    .as("concurrent retention must not prevent delivery of %s", id)
-                    .isNotNull();
-            if (row.getOriginalRequest() == null) {
-                assertThat(row.getDispatchedAt())
-                        .as("payload erased on %s while it was still awaiting delivery", id)
-                        .isNotNull();
-            }
-        }
+        // Every decision reached the exchange as a complete event. The event record rejects a null
+        // snapshot, so each one received here was built from a payload that was still present.
+        assertThat(drainDecisionIds(captureQueue))
+                .as("decisions delivered with their enrollment snapshot")
+                .containsAll(decisionIds);
     }
 
     // ── fixtures ──────────────────────────────────────────────────────────────
@@ -166,12 +180,25 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
     }
 
     /** Publishing is mandatory, so the decisions exchange needs a bound queue or the publish throws. */
-    private void bindCaptureQueue() {
+    private String bindCaptureQueue() {
         var name = "test.retention.capture." + UUID.randomUUID();
         amqpAdmin.declareQueue(new Queue(name, false, false, false));
         amqpAdmin.declareBinding(new Binding(name, Binding.DestinationType.QUEUE,
                 DECISION_EXCHANGE, DECISION_ROUTING_KEY, null));
         declaredQueues.add(name);
+        return name;
+    }
+
+    /** Reads the capture queue until it stays empty and returns the decision ids seen. */
+    private Set<UUID> drainDecisionIds(String queue) {
+        var seen = new HashSet<UUID>();
+        EnrollmentDecisionEvent event;
+        while ((event = rabbitTemplate.receiveAndConvert(queue, 500,
+                new ParameterizedTypeReference<EnrollmentDecisionEvent>() {})) != null) {
+            assertThat(event.originalRequest()).isNotNull();
+            seen.add(event.decisionId());
+        }
+        return seen;
     }
 
     private static void awaitQuietly(CountDownLatch latch) {

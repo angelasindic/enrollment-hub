@@ -36,8 +36,8 @@ sequenceDiagram
 
 - **`oauth2Login`** drives the OIDC `authorization_code` flow via the login registration (key `enrollment-gateway`, client-id `enrollment-login-client`); an unauthenticated request redirects straight to the IdP. A second registration (`payment-check`, client-id `payment-check-client`) handles the server-to-server `client_credentials` call below.
 - **`TokenRelay`** filter attaches the logged-in user's access token to each proxied request.
-- **CSRF** pairs Spring Security 7's `csrf().spa()` with a small `CsrfCookieFilter`. `spa()` provides the readable `XSRF-TOKEN` cookie repository and a `SpaCsrfTokenRequestHandler` that accepts the raw cookie value echoed in the `X-XSRF-TOKEN` header (past the default BREACH/XOR masking). It does **not** write the cookie on a plain GET — the token is resolved lazily — so `CsrfCookieFilter` forces resolution and the cookie is issued on the first authenticated GET; without it a browser/SPA client lands after login with no token to echo.
-- **RP-initiated logout** ends both the local session and the authorization-server session.
+- **CSRF** uses Spring Security 7's `csrf().spa()`: the readable `XSRF-TOKEN` cookie repository and a request handler that accepts the raw cookie value echoed in the `X-XSRF-TOKEN` header (past the default BREACH/XOR masking). The handler loads the token on every request, so the cookie is written on a plain GET and renewed in the login response; a browser/SPA client lands after login with a token to echo.
+- **RP-initiated logout** ends both the local session and the authorization-server session: the gateway redirects the browser to the authorization-server's end-session endpoint, which returns it to the gateway. The endpoint is configured explicitly (`idp.end-session-uri`), because the client registrations are built without discovery and carry no provider metadata.
 
 ## Prerequisite payment-check (credit-card route)
 

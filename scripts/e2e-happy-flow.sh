@@ -35,8 +35,7 @@ case "$landed" in
   *) echo "login did not return to the gateway ($landed)" >&2; exit 1 ;;
 esac
 
-# 3. One GET so the gateway writes the XSRF-TOKEN cookie, then read the token from the jar.
-c -o /dev/null "$GW/actuator/health"
+# 3. The gateway set the XSRF-TOKEN cookie in its login response; read the token from the jar.
 xsrf=$(awk '$6 == "XSRF-TOKEN" { print $7 }' "$JAR")
 
 # 4. Payment check: stores the credit_card_check token in the gateway session (expect 204).

@@ -156,21 +156,15 @@ Continue with [Step 8](#step-8--observe-the-asynchronous-decision). Steps 5–7 
    refresh token) in the HTTP session; the browser holds only `JSESSIONID`.
 
 Keep the tab open and open **DevTools → Console**. The requests below run from there so cookies
-and CSRF are handled automatically. First, one authenticated `GET` so the gateway issues the
-readable `XSRF-TOKEN` cookie:
-
-```js
-await fetch('http://127.0.0.1:8079/actuator/health', { credentials: 'include' });
-```
+and CSRF are handled automatically. The gateway set the readable `XSRF-TOKEN` cookie in its login
+response, so the token is already available to the page.
 
 ## Step 6 — Payment-check step (server-to-server attestation)
 
-> **CSRF setup this step relies on.** The cookie-echo below works because the gateway pairs Spring
-> Security 7's `csrf().spa()` (readable `XSRF-TOKEN` cookie + acceptance of the raw value echoed in
-> `X-XSRF-TOKEN`, past BREACH/XOR masking) with a small `CsrfCookieFilter` that writes the lazily
-> resolved token on the first authenticated `GET` — `spa()` alone does not issue the cookie on a GET.
-> If `xsrf()` throws (no cookie) or the POST returns `403` despite sending the header, you are running a
-> gateway built without these — rebuild the gateway.
+> **CSRF setup this step relies on.** The cookie-echo below works because the gateway uses Spring
+> Security 7's `csrf().spa()`: a readable `XSRF-TOKEN` cookie and acceptance of the raw value echoed in
+> `X-XSRF-TOKEN`, past BREACH/XOR masking. The token is loaded on every request, so the cookie is
+> written on a plain `GET` and renewed when the login completes.
 
 ```js
 // reads the XSRF-TOKEN cookie and sends it as X-XSRF-TOKEN (CookieCsrfTokenRepository.withHttpOnlyFalse)
