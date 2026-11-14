@@ -90,7 +90,7 @@ class GeoIndexServiceTest {
         var keysCaptor = ArgumentCaptor.forClass(List.class);
         verify(redis).execute(any(RedisScript.class), keysCaptor.capture(), any(Object[].class));
 
-        assertThat(keysCaptor.getValue()).containsExactly("geo:{MC}", "geo:{MC}:ttl");
+        assertThat(keysCaptor.getValue()).containsExactly("geo:{MC}", "geo:{MC}:ttl", "geo:{MC}:counts");
     }
 
     @SuppressWarnings("unchecked")

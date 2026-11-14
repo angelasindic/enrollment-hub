@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -93,6 +94,26 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
     }
 
     @Test
+    void redeliveredRequest_isAnsweredWithTheResultOfItsFirstRun() {
+        var enrollmentId = UUID.randomUUID();
+
+        rabbitTemplate.convertAndSend(REQUEST_EXCHANGE, GEO_KEY, request(enrollmentId));
+        var first = awaitResult(enrollmentId);
+
+        // Another enrollment at the same address raises the density in between.
+        var other = UUID.randomUUID();
+        rabbitTemplate.convertAndSend(REQUEST_EXCHANGE, GEO_KEY, request(other));
+        var between = awaitResult(other);
+
+        rabbitTemplate.convertAndSend(REQUEST_EXCHANGE, GEO_KEY, request(enrollmentId));
+        var repeated = awaitResult(enrollmentId);
+
+        assertThat(first.riskLevel()).isNotNull();
+        assertThat(between.neighborCounts().get(100)).isEqualTo(first.neighborCounts().get(100) + 1);
+        assertThat(repeated).isEqualTo(first);
+    }
+
+    @Test
     void poisonPill_routedToDeadLetterQueue() {
         var poison = MessageBuilder.withBody("{\"garbage\": true}".getBytes())
                 .setContentType(MessageProperties.CONTENT_TYPE_JSON).build();
@@ -139,6 +160,17 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
             assertThat(result.riskLevel()).isNull();
             assertThat(result.noResultReason()).isEqualTo("geocoding_failed");
         });
+    }
+
+    private GeoScoreResult awaitResult(UUID enrollmentId) {
+        var captured = new AtomicReference<GeoScoreResult>();
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            var result = (GeoScoreResult) rabbitTemplate.receiveAndConvert(RESULT_CAPTURE_QUEUE, 100);
+            assertThat(result).isNotNull();
+            assertThat(result.enrollmentId()).isEqualTo(enrollmentId);
+            captured.set(result);
+        });
+        return captured.get();
     }
 
     private static GeoScoreRequest request(UUID enrollmentId) {

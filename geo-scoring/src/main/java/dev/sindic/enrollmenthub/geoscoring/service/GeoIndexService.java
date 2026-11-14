@@ -61,6 +61,9 @@ public class GeoIndexService {
      * GEOSEARCH reads and the GEOADD write — the score-before-index ordering is
      * preserved within the atomic script execution.
      *
+     * <p>The call is idempotent per {@code enrollmentId}: the script stores the counts of the
+     * first call, and a repeated call returns them without searching or writing again.
+     *
      * @param countryCode ISO 3166-1 alpha-2 country code (partition key)
      * @param longitude   WGS 84 longitude
      * @param latitude    WGS 84 latitude
@@ -72,6 +75,7 @@ public class GeoIndexService {
                                        String enrollmentId) {
         var geoKey = keyStrategy.keyFor(countryCode);
         var ttlKey = keyStrategy.ttlKeyFor(countryCode);
+        var countsKey = keyStrategy.countsKeyFor(countryCode);
         var radii = properties.radii();
         var searchLimit = properties.searchLimit();
 
@@ -87,7 +91,7 @@ public class GeoIndexService {
 
         List<Long> counts;
         try {
-            counts = redis.execute(densityScript, List.of(geoKey, ttlKey), args.toArray());
+            counts = redis.execute(densityScript, List.of(geoKey, ttlKey, countsKey), args.toArray());
         } catch (DataAccessException ex) {
             log.error("Geo-density script failed key={} cause={}",
                     geoKey, ex.getMostSpecificCause().getMessage());
@@ -165,8 +169,9 @@ public class GeoIndexService {
     }
 
     /**
-     * Removes expired members from the geo-index and TTL tracking set for a country.
-     * Runs the cleanup Lua script in batches until all expired members are removed.
+     * Removes expired members from the geo-index, the TTL tracking set and the counts hash
+     * for a country. Runs the cleanup Lua script in batches until all expired members are
+     * removed.
      *
      * @param countryCode ISO 3166-1 alpha-2 country code
      * @param cutoff      entries inserted at or before this instant are removed
@@ -175,7 +180,7 @@ public class GeoIndexService {
     public long cleanupExpired(String countryCode, Instant cutoff) {
         var geoKey = keyStrategy.keyFor(countryCode);
         var ttlKey = keyStrategy.ttlKeyFor(countryCode);
-        var keys = List.of(geoKey, ttlKey);
+        var keys = List.of(geoKey, ttlKey, keyStrategy.countsKeyFor(countryCode));
         var batchSize = String.valueOf(properties.cleanupBatchSize());
         var cutoffEpoch = String.valueOf(cutoff.getEpochSecond());
 

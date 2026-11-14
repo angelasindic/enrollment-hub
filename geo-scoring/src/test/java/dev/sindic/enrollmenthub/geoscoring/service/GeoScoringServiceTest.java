@@ -43,7 +43,7 @@ class GeoScoringServiceTest {
     @Test
     void scoreAddress_geocodingSucceeds_publishesDensityResult() {
         given(geocodingService.resolve(SHIPPING_ADDRESS)).willReturn(Optional.of(COORDINATES));
-        given(geoIndexService.checkAndIndex(eq("MC"), eq(7.4246), eq(43.7384), anyString()))
+        given(geoIndexService.checkAndIndex("MC", 7.4246, 43.7384, REQUEST_ID.toString()))
                 .willReturn(DENSITY_RESULT);
         var expectedEvent = new GeoScoreResult(
                 REQUEST_ID, RiskLevel.LOW, null, Map.of(100, 3, 250, 8), List.of());
@@ -53,6 +53,16 @@ class GeoScoringServiceTest {
         service.scoreAddress(REQUEST_ID, SHIPPING_ADDRESS);
 
         then(publisher).should().publish(expectedEvent);
+    }
+
+    @Test
+    void scoreAddress_indexesThePointUnderTheEnrollmentId() {
+        given(geocodingService.resolve(SHIPPING_ADDRESS)).willReturn(Optional.of(COORDINATES));
+
+        service.scoreAddress(REQUEST_ID, SHIPPING_ADDRESS);
+
+        // A member that is stable across deliveries lets the index recognise a repeated request.
+        then(geoIndexService).should().checkAndIndex("MC", 7.4246, 43.7384, REQUEST_ID.toString());
     }
 
     @Test
@@ -82,7 +92,7 @@ class GeoScoringServiceTest {
     @Test
     void scoreAddress_publisherFailurePropagates() {
         given(geocodingService.resolve(SHIPPING_ADDRESS)).willReturn(Optional.of(COORDINATES));
-        given(geoIndexService.checkAndIndex(eq("MC"), anyDouble(), anyDouble(), anyString()))
+        given(geoIndexService.checkAndIndex(eq("MC"), anyDouble(), anyDouble(), eq(REQUEST_ID.toString())))
                 .willReturn(DENSITY_RESULT);
         given(geoIndexService.toEvent(any(), any()))
                 .willReturn(new GeoScoreResult(

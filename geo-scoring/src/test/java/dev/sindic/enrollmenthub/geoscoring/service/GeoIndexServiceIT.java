@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 class GeoIndexServiceIT extends BaseIntegrationTest {
 
@@ -49,6 +50,72 @@ class GeoIndexServiceIT extends BaseIntegrationTest {
 
         var key = keyStrategy.keyFor("MC");
         assertThat(redis.hasKey(key)).isTrue();
+    }
+
+    @Test
+    void checkAndIndex_twoEnrollments_writeOneEntryEachIntoIndexTtlSetAndCountsHash() {
+        var geoKey = keyStrategy.keyFor("DE");
+        var ttlKey = keyStrategy.ttlKeyFor("DE");
+        var countsKey = keyStrategy.countsKeyFor("DE");
+        var before = Instant.now().getEpochSecond();
+
+        // Two enrollments about 7 m apart; the second finds the first in every radius.
+        geoIndexService.checkAndIndex("DE", 13.4050, 52.5200, "e-1");
+        geoIndexService.checkAndIndex("DE", 13.4051, 52.5200, "e-2");
+
+        var after = Instant.now().getEpochSecond();
+
+        // geo:{DE}: enrollment ID -> position
+        var positions = redis.opsForGeo().position(geoKey, "e-1", "e-2");
+        assertThat(positions).hasSize(2);
+        assertThat(positions.get(0).getX()).isCloseTo(13.4050, within(0.00001));
+        assertThat(positions.get(0).getY()).isCloseTo(52.5200, within(0.00001));
+        assertThat(positions.get(1).getX()).isCloseTo(13.4051, within(0.00001));
+        assertThat(positions.get(1).getY()).isCloseTo(52.5200, within(0.00001));
+        assertThat(redis.opsForZSet().size(geoKey)).isEqualTo(2L);
+
+        // geo:{DE}:ttl: enrollment ID -> insertion epoch in seconds
+        assertThat(redis.opsForZSet().score(ttlKey, "e-1")).isBetween((double) before, (double) after);
+        assertThat(redis.opsForZSet().score(ttlKey, "e-2")).isBetween((double) before, (double) after);
+        assertThat(redis.opsForZSet().size(ttlKey)).isEqualTo(2L);
+
+        // geo:{DE}:counts: enrollment ID -> radii and the counts of the first run. The order
+        // of the two JSON fields is not fixed, so each is asserted on its own.
+        var counts = redis.<String, String>opsForHash();
+        assertThat(counts.keys(countsKey)).containsExactlyInAnyOrder("e-1", "e-2");
+        assertThat(counts.get(countsKey, "e-1"))
+                .contains("\"radii\":[100,250,500]")
+                .contains("\"counts\":[0,0,0]");
+        assertThat(counts.get(countsKey, "e-2"))
+                .contains("\"radii\":[100,250,500]")
+                .contains("\"counts\":[1,1,1]");
+    }
+
+    @Test
+    void checkAndIndex_repeatedEnrollment_returnsTheFirstCountsAndWritesNothing() {
+        var geoKey = keyStrategy.keyFor("DE");
+        var ttlKey = keyStrategy.ttlKeyFor("DE");
+        var countsKey = keyStrategy.countsKeyFor("DE");
+
+        var first = geoIndexService.checkAndIndex("DE", 13.4050, 52.5200, "e-1");
+        // Backdated so that an overwritten insertion time is distinguishable from the original.
+        var insertedAt = (double) Instant.now().minusSeconds(600).getEpochSecond();
+        redis.opsForZSet().add(ttlKey, "e-1", insertedAt);
+
+        // Other enrollments arrive at the same address in between.
+        geoIndexService.checkAndIndex("DE", 13.4050, 52.5200, "e-2");
+        geoIndexService.checkAndIndex("DE", 13.4050, 52.5200, "e-3");
+
+        var repeated = geoIndexService.checkAndIndex("DE", 13.4050, 52.5200, "e-1");
+
+        // A recount would find e-2, e-3 and the enrollment's own point.
+        assertThat(first.neighborCounts()).containsEntry(100, 0).containsEntry(250, 0).containsEntry(500, 0);
+        assertThat(repeated).isEqualTo(first);
+
+        assertThat(redis.opsForZSet().size(geoKey)).isEqualTo(3L);
+        assertThat(redis.opsForZSet().size(ttlKey)).isEqualTo(3L);
+        assertThat(redis.opsForZSet().score(ttlKey, "e-1")).isEqualTo(insertedAt);
+        assertThat(redis.<String, String>opsForHash().get(countsKey, "e-1")).contains("\"counts\":[0,0,0]");
     }
 
     @Test
@@ -88,6 +155,7 @@ class GeoIndexServiceIT extends BaseIntegrationTest {
     void cleanupExpired_removesExpiredEntries_doesNotAffectDensityCounts() {
         var geoKey = keyStrategy.keyFor("MC");
         var ttlKey = keyStrategy.ttlKeyFor("MC");
+        var countsKey = keyStrategy.countsKeyFor("MC");
         var pastEpoch = Instant.now().minusSeconds(3600).getEpochSecond();
 
         // Seed 5 entries with a far-past TTL timestamp directly in Redis
@@ -96,6 +164,7 @@ class GeoIndexServiceIT extends BaseIntegrationTest {
                     new org.springframework.data.geo.Point(7.4246 + i * 0.00001, 43.7384),
                     "old-" + i);
             redis.opsForZSet().add(ttlKey, "old-" + i, pastEpoch);
+            redis.opsForHash().put(countsKey, "old-" + i, "{\"radii\":[100,250,500],\"counts\":[0,0,0]}");
         }
 
         // Index 1 recent entry via normal path (gets current timestamp)
@@ -117,6 +186,10 @@ class GeoIndexServiceIT extends BaseIntegrationTest {
         // TTL tracking set should no longer contain expired members
         var ttlSize = redis.opsForZSet().size(ttlKey);
         assertThat(ttlSize).isEqualTo(3L); // recent-1, probe-before, probe-after
+
+        // The counts hash loses the expired members together with the index
+        assertThat(redis.<String, String>opsForHash().keys(countsKey))
+                .containsExactlyInAnyOrder("recent-1", "probe-before", "probe-after");
     }
 
     @Test

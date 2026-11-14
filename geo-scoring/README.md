@@ -19,6 +19,9 @@ Geocoding outcomes split two ways:
 
 The 48-hour per-member TTL on the geo-index is enforced out of band by `GeoIndexCleanupJob` (see design.md).
 
+The density check is idempotent per `enrollmentId`: a redelivered or replayed request is answered with the neighbor
+counts stored by its first run and adds nothing to the geo-index (ADR-11).
+
 ### Geocoding Provider (ADR-09)
 
 ADR-09 commits to Nominatim as *the* geocoding provider. `NominatimGeocodingProvider` is the sole

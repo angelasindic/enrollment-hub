@@ -99,7 +99,7 @@ The drivers in §1 state what the system must achieve. The constraints below bou
 
 **Decision traceability.** GDPR Art. 22 requires that an automated decision affecting a person be reconstructable after the fact. The system delivers this at two levels, unequally. How the decision was composed is fully reconstructable: the settled signal map, with each entry's outcome, risk level, or the reason it has neither, is persisted on the correlation record and republished on the decision event, and trace context propagates across every service and message boundary (§6.3; ADR-14, ADR-17). How a scoring signal reached its tier is not: only the tier is persisted, and the geo-index that produced it expires after 48 hours (ADR-12). Retaining the enrollment payload would not close that gap, which is why ADR-20 erases it after dispatch; persisting the measurement at settle time would (§10.1).
 
-**Identity isolation.** Spatial data and identity data are held in separate logical silos, and spatial signals use anonymous identifiers, so a single-service compromise cannot correlate a location back to a person.
+**Identity isolation.** Spatial data and identity data are held in separate logical silos. The geo-index stores coordinates under the `enrollmentId`, a pseudonymous identifier whose link to a person is held outside the geo-scoring store, so a single-service compromise cannot correlate a location back to a person.
 
 **Signed assertions only.** The hub cannot verify identity itself. It trusts externally signed assertions (eIDAS or payment JWTs) and authenticated sessions, and if the trust chain breaks, intake halts rather than proceeding on unverified input.
 
@@ -351,7 +351,7 @@ A control-by-control map of this section and §8.2, with the implementation, the
 
 Two Redis structures and one PostgreSQL table hold personal data, each under its own rule. The keying scheme, score encoding, and per-member TTL are in `geo-scoring/design.md`.
 
-**Geo-index.** Coordinates only: no names, phone numbers, or unit numbers. Members are single-use `enrollmentId` tokens; the link to an identity is held separately in the access-controlled correlation store. This is pseudonymized personal data (GDPR Art. 4(5)), not anonymized, so it stays in scope, minimized and short-lived: every member expires after 48 hours (ADR-12).
+**Geo-index.** Coordinates only: no names, phone numbers, or unit numbers. Members are single-use `enrollmentId` tokens; the link to an identity is held separately in the access-controlled correlation store. The neighbor counts of each enrollment's first density check are kept under the same identifier, so that a repeated request receives the same answer, and are removed together with the member. This is pseudonymized personal data (GDPR Art. 4(5)), not anonymized, so it stays in scope, minimized and short-lived: every member expires after 48 hours (ADR-12).
 
 **Geocoding cache.** Maps a peppered HMAC-SHA256 digest of the normalized address to coordinates under a 90-day TTL (`geocoding.cache.ttl`). The entry is address → coordinates, not enrollment → address, so many enrollments collapse onto one entry and none is identifiable from it. The TTL outlasts the geo-index window on purpose: the cache spares Nominatim repeated lookups, and an address's coordinates do not change.
 
@@ -439,7 +439,7 @@ Delivery is at-least-once and every consumer is idempotent, which gives effectiv
 | Entry point: correlation record ↔ trigger event | Causal; no consumer observes a check command for an uncommitted correlation record | Intake queue + publish-after-commit | §8.7, ADR-13 |
 | Exit point: correlation record ↔ decision event | Record/reality parity; decision computed once, persisted, then published, so the downstream effect matches the decision of record | Commit-then-publish outbox: eager after-commit dispatch, scheduled sweep replaying after a crash; idempotent consumers | ADR-17 |
 | Correlation record (per `enrollmentId`) | Serialized per-row updates (row lock, not SERIALIZABLE isolation); exactly-once decision *computation* + at-least-once *delivery* | `SELECT FOR UPDATE`; completion predicate evaluated inside the lock; idempotency guard on the signal slot | ADR-16, ADR-17 |
-| Geo-index density check + write (per request) | Atomic across check and write; no TOCTOU race between concurrent enrollments | Single Redis Lua script | ADR-11 |
+| Geo-index density check + write (per request) | Atomic across check and write; no TOCTOU race between concurrent enrollments; idempotent per `enrollmentId` | Single Redis Lua script | ADR-11 |
 | Cross-service event delivery | At-least-once + idempotent consumers (effectively-once) | Publisher Confirms with returned-callback retry on every publish path; AUTO ack after the listener's DB commit | ADR-13, ADR-16 |
 | Poison-pill messages | Contained for operator review, never silently dropped | DLX with a bounded redelivery count | ADR-13, §8.4 |
 | Result for a correlation row that no longer exists | Treated as an inconsistency for triage, not as a late result | `UnknownCorrelationException`, dead-lettered on the first throw with no retry. Retention never deletes a row (ADR-20), so any future deletion window must exceed the maximum plausible result-arrival window | ADR-16, ADR-20, §10.1 |

@@ -21,11 +21,12 @@ class GeoIndexKeyStrategyTest {
     }
 
     @Test
-    void keyAndTtlKey_shareHashTag_soTheyColocateOnOneClusterSlot() {
-        // The density/cleanup Lua scripts touch both keys; under Redis Cluster they must
+    void allKeys_shareHashTag_soTheyColocateOnOneClusterSlot() {
+        // The density/cleanup Lua scripts touch all three keys; under Redis Cluster they must
         // hash to the same slot. The shared {countryCode} hash tag guarantees it (ADR-11).
         assertThat(strategy.keyFor("DE")).isEqualTo("geo:{DE}");
         assertThat(strategy.ttlKeyFor("DE")).isEqualTo("geo:{DE}:ttl");
+        assertThat(strategy.countsKeyFor("DE")).isEqualTo("geo:{DE}:counts");
     }
 
     @Test
@@ -39,6 +40,17 @@ class GeoIndexKeyStrategyTest {
                 new GeoIndexProperties("geoindex", 200, List.of(), null, 0, null));
 
         assertThat(custom.keyFor("MC")).isEqualTo("geoindex:{MC}");
+    }
+
+    @Test
+    void countryCodeOf_indexKey_returnsTheCountryCodeWithoutTheHashTagBraces() {
+        assertThat(strategy.countryCodeOf(strategy.keyFor("DE"))).contains("DE");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"geo:{DE}:ttl", "geo:{DE}:counts", "geo:{}", "geo:DE", "other:{DE}"})
+    void countryCodeOf_anyOtherKey_returnsEmpty(String key) {
+        assertThat(strategy.countryCodeOf(key)).isEmpty();
     }
 
     @ParameterizedTest
