@@ -15,6 +15,7 @@ import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -48,9 +49,23 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
     private static final String RESULT_CAPTURE_QUEUE = "test.geo.result.capture";
 
     @Autowired RabbitTemplate rabbitTemplate;
+    @Value("${spring.rabbitmq.listener.simple.prefetch}") int prefetch;
 
     @MockitoSpyBean GeoScoreRequestListener listener;
     @MockitoSpyBean GeocodingService geocodingService;
+
+    @Test
+    void listenerConsumes_withThePrefetchFromTheConfiguration() throws Exception {
+        // Asked of the broker, which enforces the limit: every consumer on the queue has to carry
+        // the configured prefetch. A factory that skips Boot's listener properties consumes with
+        // the Spring AMQP default of 250.
+        var consumers = RABBITMQ.execInContainer(
+                "rabbitmqctl", "--quiet", "list_consumers", "queue_name", "prefetch_count").getStdout();
+
+        assertThat(consumers.lines().filter(line -> line.startsWith(REQUEST_QUEUE + "\t")))
+                .isNotEmpty()
+                .allSatisfy(line -> assertThat(line).endsWith("\t" + prefetch));
+    }
 
     @Test
     void handleGeoScoreRequest_publishesGeoScoreResult() {

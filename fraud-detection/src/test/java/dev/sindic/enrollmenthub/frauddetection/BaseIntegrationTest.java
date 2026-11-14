@@ -18,7 +18,7 @@ public abstract class BaseIntegrationTest {
     private static final String RABBITMQ_IMAGE =
             "rabbitmq:4-management-alpine@sha256:b618738ea52cb6d0073ee9f0412ede133411ecacd7afa40f17be748a6d9a9ee1";
 
-    static final RabbitMQContainer RABBITMQ =
+    protected static final RabbitMQContainer RABBITMQ =
             new RabbitMQContainer(DockerImageName.parse(RABBITMQ_IMAGE).asCompatibleSubstituteFor("rabbitmq"))
                     .waitingFor(Wait.forLogMessage(".*Server startup complete.*\\n", 1));
 

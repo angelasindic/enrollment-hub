@@ -11,6 +11,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -37,9 +38,9 @@ class AmqpConfig {
     private static final long   MAX_INTERVAL     = 10_000L;
 
     /**
-     * Steady-state and burst concurrency for the listener container (M2 in the geo-scoring
-     * review). Threads are virtual ({@link VirtualThreadTaskExecutor}), so the cost of holding
-     * idle consumers is dominated by the Rabbit channel each one owns, not by OS threads.
+     * Steady-state and burst concurrency for the listener container. Threads are virtual
+     * ({@link VirtualThreadTaskExecutor}), so the cost of holding idle consumers is dominated by
+     * the Rabbit channel each one owns, not by OS threads.
      * 8/24 keeps concurrent load on self-hosted Nominatim and Redis bounded while still
      * absorbing realistic enrollment bursts.
      */
@@ -138,10 +139,14 @@ class AmqpConfig {
      */
     @Bean
     SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer,
             ConnectionFactory connectionFactory,
             JacksonJsonMessageConverter messageConverter) {
         var factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
+        // Applies spring.rabbitmq.listener.simple.* (the prefetch among them); a factory built by
+        // hand ignores those properties. It runs first because it also sets the executor,
+        // observation and missing-queue behaviour, which the calls below then override.
+        configurer.configure(factory, connectionFactory);
         factory.setMessageConverter(messageConverter);
         // The request queue is owned/declared by the decision-engine (ADR-13 §Channel Ownership),
         // not by geo-scoring. Tolerate it not existing yet at startup — the container retries

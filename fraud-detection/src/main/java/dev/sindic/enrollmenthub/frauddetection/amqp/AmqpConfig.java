@@ -11,6 +11,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -112,10 +113,14 @@ class AmqpConfig {
      */
     @Bean
     SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer,
             ConnectionFactory connectionFactory,
             JacksonJsonMessageConverter messageConverter) {
         var factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
+        // Applies spring.rabbitmq.listener.simple.* (the prefetch among them); a factory built by
+        // hand ignores those properties. It runs first because it also sets the executor,
+        // observation and missing-queue behaviour, which the calls below then override.
+        configurer.configure(factory, connectionFactory);
         factory.setMessageConverter(messageConverter);
         // The request queue is owned/declared by the decision-engine (ADR-13 §Channel Ownership),
         // not by fraud-detection. Tolerate it not existing yet at startup — the container retries

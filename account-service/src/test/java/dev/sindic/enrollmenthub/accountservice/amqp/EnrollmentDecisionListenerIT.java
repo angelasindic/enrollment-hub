@@ -16,6 +16,7 @@ import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.time.Duration;
@@ -40,7 +41,21 @@ import static org.mockito.Mockito.verify;
 class EnrollmentDecisionListenerIT extends BaseIntegrationTest {
 
     @Autowired RabbitTemplate rabbitTemplate;
+    @Value("${spring.rabbitmq.listener.simple.prefetch}") int prefetch;
     @MockitoSpyBean AccountProvisioningService service;
+
+    @Test
+    void listenerConsumes_withThePrefetchFromTheConfiguration() throws Exception {
+        // Asked of the broker, which enforces the limit: every consumer on the queue has to carry
+        // the configured prefetch. A factory that skips Boot's listener properties consumes with
+        // the Spring AMQP default of 250.
+        var consumers = RABBITMQ.execInContainer(
+                "rabbitmqctl", "--quiet", "list_consumers", "queue_name", "prefetch_count").getStdout();
+
+        assertThat(consumers.lines().filter(line -> line.startsWith(AmqpConfig.DECISION_QUEUE + "\t")))
+                .isNotEmpty()
+                .allSatisfy(line -> assertThat(line).endsWith("\t" + prefetch));
+    }
 
     @Test
     void decisionPublishedToExchange_isRoutedToTheListener() {

@@ -31,7 +31,7 @@ public abstract class BaseIntegrationTest {
     private static final String NOMINATIM_IMAGE =
             "mediagis/nominatim:5.2@sha256:3c49ad9443baab1f1ea13a6b1355fa377ae5fb0874dc328cba9b97a0ca7914bb";
 
-    static final RabbitMQContainer RABBITMQ =
+    protected static final RabbitMQContainer RABBITMQ =
             new RabbitMQContainer(DockerImageName.parse(RABBITMQ_IMAGE).asCompatibleSubstituteFor("rabbitmq"))
                     .waitingFor(Wait.forLogMessage(".*Server startup complete.*\\n", 1));
 
