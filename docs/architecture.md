@@ -290,7 +290,7 @@ The system runs locally as host-run Spring Boot services against two Docker Comp
 - Prometheus: metrics scraping and alert-rule evaluation (`monitoring/prometheus/`)
 - Grafana: single pane across all three signals; datasources provisioned at startup
 
-**Services (host-run):** gateway, authorization-server, decision-engine, geo-scoring, fraud-detection (stub), and the shared `contracts` library.
+**Services (host-run):** gateway, authorization-server, decision-engine, geo-scoring, fraud-detection (stub), account-service (stub decision consumer), and the shared `contracts` library.
 
 ### 7.2 Target Environment
 

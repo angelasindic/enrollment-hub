@@ -19,7 +19,7 @@ spring:
             jwk-set-uri: ${IDP_ISSUER_URI:http://localhost:9000}/oauth2/jwks
             user-info-uri: ${IDP_ISSUER_URI:http://localhost:9000}/userinfo
             user-name-attribute: sub
-        # Client secrets have no default; they come from .env (README, Running locally) and must
+        # Client secrets have no default; they come from the environment (.env locally) and must
         # match the authorization-server's registrations.
         registration:
           enrollment-gateway:
@@ -58,6 +58,11 @@ spring:
 server:
   port: 8079
   forward-headers-strategy: framework
+
+# OIDC end-session endpoint of the authorization-server, the target of RP-initiated logout. Listed
+# explicitly, like the provider endpoints above, because no discovery runs at startup.
+idp:
+  end-session-uri: ${IDP_ISSUER_URI:http://localhost:9000}/connect/logout
 
 # Simulated payment-check issuer (co-located in the authorization-server). The gateway calls
 # POST {issuer-uri}/credit-card server-to-server with the client_credentials token (Step 3 / ADR-03).

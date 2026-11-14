@@ -147,7 +147,7 @@ end
         Q_FRAUD[[fraud.detection.requests.queue]]:::q
         Q_DE_GEO[[decision-engine.geo-score.results.queue]]:::q
         Q_DE_FRAUD[[decision-engine.fraud-check.results.queue]]:::q
-        Q_AS[[account-service.decisions.queue<br/>out of scope]]:::q
+        Q_AS[[account-service.decisions.queue]]:::q
     end
     EX_INTAKE -->|"enrollment.intake"| Q_INTAKE
     EX_REQ -->|"geo.score"| Q_GEO
@@ -188,7 +188,8 @@ the broker accumulates them on the engine-owned request queue without returning 
 
 **Layer 3 — outbound: `enrollment.decisions`.** A single logical publisher (the decision engine) on
 a dedicated topic exchange with routing key `enrollment.decision.completed`. The Account Service consumes it
-and owns `account-service.decisions.queue`, whose binding and DLX are out of scope. The publish is
+and owns `account-service.decisions.queue`, its binding and its DLX (the `account-service` module,
+a stub that deduplicates on `decisionId` and logs). The publish is
 not a direct send from the result handler or the timeout poller: the decision is computed once and
 persisted on the correlation record, then dispatched through one shared path (`DecisionDispatcher`)
 with two triggers — an after-commit eager dispatch owning steady-state latency, and the
@@ -209,7 +210,7 @@ for the dead-letter queue and `<service>.dlx` for its DLX. All entries are durab
 | `fraud.detection.requests.queue`              | `fraud.detection.requests.dlx`              | `fraud.detection.requests.queue.dlq`              | decision-engine (consumed by fraud-detection)  |
 | `decision-engine.geo-score.results.queue`     | `decision-engine.geo-score.results.dlx`     | `decision-engine.geo-score.results.queue.dlq`     | decision-engine                                |
 | `decision-engine.fraud-check.results.queue`   | `decision-engine.fraud-check.results.dlx`   | `decision-engine.fraud-check.results.queue.dlq`   | decision-engine                                |
-| `account-service.decisions.queue`             | (owned by account-service)                  | (owned by account-service)                        | account-service *(out of scope)*               |
+| `account-service.decisions.queue`             | `account-service.decisions.dlx`             | `account-service.decisions.queue.dlq`             | account-service                                |
 
 The outbound `enrollment.decisions` exchange has no decision-engine-side DLQ: the decision engine is
 the producer there, and undelivered decisions are retained on the correlation-record outbox until

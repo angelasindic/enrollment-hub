@@ -3,8 +3,15 @@ package dev.sindic.enrollmenthub.authorizationserver;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.util.MultiValueMap;
 
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -62,5 +69,40 @@ class AuthorizationServerSecurityIT extends BaseIntegrationTest {
                         .with(httpBasic("enrollment-login-client", LOGIN_CLIENT_SECRET)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("unauthorized_client"));
+    }
+
+    @Test
+    void strayRequestDuringLogin_doesNotReplacePendingAuthorizationRequest() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+
+        // The authorization endpoint saves the request and sends the unauthenticated browser to /login.
+        MultiValueMap<String, String> authorizationRequest = MultiValueMap.fromSingleValue(Map.of(
+                "response_type", "code",
+                "client_id", "enrollment-login-client",
+                "redirect_uri", "http://127.0.0.1:8079/login/oauth2/code/enrollment-gateway",
+                "scope", "openid",
+                "state", "client-state",
+                "code_challenge", "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                "code_challenge_method", "S256"));
+        mockMvc.perform(get("/oauth2/authorize")
+                        .queryParams(authorizationRequest)
+                        .accept(MediaType.TEXT_HTML)
+                        .session(session))
+                .andExpect(status().is3xxRedirection());
+
+        // Chrome requests this path whenever DevTools is open, including on the login page.
+        mockMvc.perform(get("/.well-known/appspecific/com.chrome.devtools.json")
+                        .accept(MediaType.TEXT_HTML)
+                        .session(session))
+                .andExpect(status().is3xxRedirection());
+
+        String target = mockMvc.perform(post("/login")
+                        .param("username", "user")
+                        .param("password", "password")
+                        .with(csrf())
+                        .session(session))
+                .andExpect(status().is3xxRedirection())
+                .andReturn().getResponse().getRedirectedUrl();
+        assertThat(target).contains("/oauth2/authorize?").contains("state=client-state");
     }
 }

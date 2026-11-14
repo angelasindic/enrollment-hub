@@ -9,11 +9,13 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -72,6 +74,19 @@ class AuthorizationCodeFlowIT extends BaseIntegrationTest {
     }
 
     @Test
+    void userInfo_acceptsAccessTokenWithEnrollmentApiAudience() throws Exception {
+        JsonNode tokenResponse = runAuthorizationCodeFlow();
+
+        // The gateway's oauth2Login calls userinfo (scope profile). The endpoint reloads the stored
+        // authorization, so the customized aud claim must survive the JDBC round trip.
+        MvcResult result = mockMvc.perform(get("/userinfo")
+                        .header("Authorization", "Bearer " + tokenResponse.get("access_token").asText()))
+                .andExpect(status().isOk())
+                .andReturn();
+        assertThat(readJson(result).get("sub").asText()).isEqualTo("user");
+    }
+
+    @Test
     void machineToken_withoutEnrollmentWrite_keepsDefaultAudience() throws Exception {
         MvcResult result = mockMvc.perform(post("/oauth2/token")
                         .param("grant_type", "client_credentials")
@@ -94,16 +109,18 @@ class AuthorizationCodeFlowIT extends BaseIntegrationTest {
         MockHttpSession session = (MockHttpSession) loginResult.getRequest().getSession(false);
         String codeVerifier = UUID.randomUUID() + "-" + UUID.randomUUID();
 
-        // queryParam (not param): SAS parses the authorization request off the query string.
+        // queryParams (not params): SAS parses the authorization request off the query string.
         // code_challenge: the authorization server mandates PKCE (OAuth 2.1 default).
+        MultiValueMap<String, String> authorizationRequest = MultiValueMap.fromSingleValue(Map.of(
+                "response_type", "code",
+                "client_id", "enrollment-login-client",
+                "redirect_uri", REDIRECT_URI,
+                "scope", "openid profile enrollment:write",
+                "state", "client-state",
+                "code_challenge", s256(codeVerifier),
+                "code_challenge_method", "S256"));
         MvcResult authorizeResult = mockMvc.perform(get("/oauth2/authorize")
-                        .queryParam("response_type", "code")
-                        .queryParam("client_id", "enrollment-login-client")
-                        .queryParam("redirect_uri", REDIRECT_URI)
-                        .queryParam("scope", "openid profile enrollment:write")
-                        .queryParam("state", "client-state")
-                        .queryParam("code_challenge", s256(codeVerifier))
-                        .queryParam("code_challenge_method", "S256")
+                        .queryParams(authorizationRequest)
                         .session(session))
                 .andReturn();
 
