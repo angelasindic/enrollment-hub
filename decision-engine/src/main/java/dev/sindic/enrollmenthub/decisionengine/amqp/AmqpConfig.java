@@ -5,6 +5,7 @@ import dev.sindic.enrollmenthub.decisionengine.service.UnknownCorrelationExcepti
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Declarable;
@@ -22,6 +23,7 @@ import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConversionException;
+import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -257,10 +259,18 @@ public class AmqpConfig {
 
     @Bean
     SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer,
             ConnectionFactory connectionFactory,
             JacksonJsonMessageConverter messageConverter) {
         var factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
+        // Applies spring.rabbitmq.listener.simple.* (the prefetch among them); a factory built by
+        // hand ignores those properties. It runs first because it also sets the executor and
+        // observation, which the calls below then override.
+        configurer.configure(factory, connectionFactory);
+        // Not left to spring.rabbitmq.listener.simple.acknowledge-mode: the intake message may be
+        // acked only after the listener returns, that is after the downstream publish, so that a
+        // crash before the publish leaves it unacked and the broker redelivers it.
+        factory.setAcknowledgeMode(AcknowledgeMode.AUTO);
         factory.setMessageConverter(messageConverter);
         factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-orch-"));
         factory.setObservationEnabled(true);

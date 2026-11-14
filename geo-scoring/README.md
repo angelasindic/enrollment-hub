@@ -86,7 +86,7 @@ docker compose up -d  # Redis, RabbitMQ, libpostal, Nominatim
 | `nominatim.read-timeout` | `NOMINATIM_READ_TIMEOUT` | `5s` | Socket read timeout on Nominatim queries. |
 | `libpostal.connect-timeout` | `LIBPOSTAL_CONNECT_TIMEOUT` | `2s` | TCP connect timeout on the libpostal `RestClient`. |
 | `libpostal.read-timeout` | `LIBPOSTAL_READ_TIMEOUT` | `5s` | Socket read timeout on libpostal parses. |
-| `spring.rabbitmq.listener.simple.prefetch` | `RABBITMQ_LISTENER_PREFETCH` | `16` | Per-consumer unacked-message buffer. Held low because per-message latency varies ~200× (cache hit vs. Nominatim miss); a high prefetch head-of-line-blocks slow messages. See ADR-13 §Consumer concurrency. |
+| `spring.rabbitmq.listener.simple.prefetch` | `RABBITMQ_LISTENER_PREFETCH` | `16` | Per-consumer unacked-message buffer. Held low because per-message latency varies ~200× (cache hit vs. Nominatim miss); a high prefetch head-of-line-blocks slow messages. |
 | `nominatim.port` | `NOMINATIM_PORT` | `8088` | Nominatim port |
 | `geocoding.cache.hmac-secret` | `GEOCODING_CACHE_HMAC_SECRET` | *(required)* | HMAC-SHA256 pepper for cache keys |
 | `geocoding.cache.ttl` | `GEOCODING_CACHE_TTL` | `P90D` | TTL applied to cached coordinates on store (ISO-8601 duration) |

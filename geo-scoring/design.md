@@ -311,17 +311,16 @@ decision-engine (ADR-13 §Channel Ownership); active monitoring on `rabbitmq.dlq
 
 The container runs `concurrentConsumers=8` (steady state) with `maxConcurrentConsumers=24` (elastic burst),
 backed by `VirtualThreadTaskExecutor` (ADR-04). Per-consumer prefetch is held at `16` via
-`spring.rabbitmq.listener.simple.prefetch` — well below Boot's default 250 — because per-message latency varies
-by roughly 200× between a geocoding cache hit (~1 ms) and a Nominatim miss (~50–200 ms). A high prefetch would
-let a single consumer absorb a burst of messages and head-of-line-block the slow ones; the low value forces
-RabbitMQ to hand work to whichever consumer just acked, evening out the variable cost. Maximum in-flight at
-burst is 24 × 16 = 384 messages.
+`spring.rabbitmq.listener.simple.prefetch` — well below Spring AMQP's default of 250 — because per-message
+latency varies by roughly 200× between a geocoding cache hit (~1 ms) and a Nominatim miss (~50–200 ms). A high
+prefetch would let a single consumer absorb a burst of messages and head-of-line-block the slow ones; the low
+value forces RabbitMQ to hand work to whichever consumer just acked, evening out the variable cost. Maximum
+in-flight at burst is 24 × 16 = 384 messages.
 
 Sized to ride below downstream capacity, not at it: under sustained downstream sickness the saturation surfaces
 as Nominatim latency and `rabbitmq.dlq.depth` rising, not as Rabbit-side broker pressure. At 24 concurrent
 consumers a 429 spike from Nominatim means up to 24 × 3 = 72 retries in flight in the same backoff window —
-still bounded per message, but loud enough that M4 (circuit breaker) becomes the natural escalation. See
-ADR-13 §Consumer concurrency for the cross-service sizing rationale.
+still bounded per message, but loud enough that a circuit breaker becomes the natural escalation.
 
 **Geocoding outcomes split into three buckets**, each with a deliberate handling strategy:
 

@@ -12,7 +12,11 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Exchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.boot.amqp.autoconfigure.RabbitProperties;
+import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.UUID;
 
@@ -93,12 +97,40 @@ class AmqpConfigTest {
         // message is acked only after the listener returns — after the downstream
         // publish — so a crash before the publish leaves it unacked and the broker
         // redelivers it. NONE (broker auto-ack) would silently drop the commands.
-        var factory = new AmqpConfig().rabbitListenerContainerFactory(
-                mock(ConnectionFactory.class), mock(JacksonJsonMessageConverter.class));
-
-        var container = factory.createListenerContainer();
+        var container = listenerContainer(new RabbitProperties());
 
         assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
+    }
+
+    @Test
+    void rabbitListenerContainerFactory_keepsAutoAck_whenThePropertySaysOtherwise() {
+        // The factory applies spring.rabbitmq.listener.simple.*, and acknowledge-mode is one of
+        // those properties. It must not reach the container.
+        var properties = new RabbitProperties();
+        properties.getListener().getSimple().setAcknowledgeMode(AcknowledgeMode.NONE);
+
+        var container = listenerContainer(properties);
+
+        assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
+    }
+
+    @Test
+    void rabbitListenerContainerFactory_appliesThePrefetchProperty() {
+        // A factory that skips Boot's listener properties consumes with the Spring AMQP default
+        // of 250, whatever spring.rabbitmq.listener.simple.prefetch says.
+        var properties = new RabbitProperties();
+        properties.getListener().getSimple().setPrefetch(7);
+
+        var container = listenerContainer(properties);
+
+        assertThat(ReflectionTestUtils.getField(container, "prefetchCount")).isEqualTo(7);
+    }
+
+    private static SimpleMessageListenerContainer listenerContainer(RabbitProperties properties) {
+        var factory = new AmqpConfig().rabbitListenerContainerFactory(
+                new SimpleRabbitListenerContainerFactoryConfigurer(properties),
+                mock(ConnectionFactory.class), mock(JacksonJsonMessageConverter.class));
+        return factory.createListenerContainer();
     }
 
     @Test

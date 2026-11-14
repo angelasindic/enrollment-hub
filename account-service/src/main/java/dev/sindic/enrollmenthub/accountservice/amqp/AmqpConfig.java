@@ -13,6 +13,7 @@ import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.DefaultJacksonJavaTypeMapper;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
+import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.VirtualThreadTaskExecutor;
@@ -101,10 +102,14 @@ class AmqpConfig {
      */
     @Bean
     SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer,
             ConnectionFactory connectionFactory,
             JacksonJsonMessageConverter messageConverter) {
         var factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
+        // Applies spring.rabbitmq.listener.simple.* (the prefetch among them); a factory built by
+        // hand ignores those properties. It runs first because it also sets the executor and
+        // observation, which the calls below then override.
+        configurer.configure(factory, connectionFactory);
         factory.setMessageConverter(messageConverter);
         factory.setTaskExecutor(new VirtualThreadTaskExecutor("amqp-account-"));
         factory.setObservationEnabled(true);
