@@ -25,4 +25,16 @@ class EnrollmentRequestTest {
                 null, "10115", "Berlin", "BE", "DE");
         assertThat(a.streetLines()).isEmpty();
     }
+
+    @Test
+    void countryCodeIsNormalizedToUpperCase() {
+        assertThat(address("de").countryCode()).isEqualTo("DE");
+        assertThat(address("De").countryCode()).isEqualTo("DE");
+        assertThat(address("DE").countryCode()).isEqualTo("DE");
+    }
+
+    @Test
+    void nullCountryCodeStaysNullForValidationToReport() {
+        assertThat(address(null).countryCode()).isNull();
+    }
 }

@@ -42,11 +42,12 @@ public class GeoIndexCleanupJob {
 
         try (var cursor = redis.scan(ScanOptions.scanOptions().match(pattern).count(100).build())) {
             while (cursor.hasNext()) {
-                var key = cursor.next();
-                if (key.endsWith(":ttl")) continue;
-
-                var countryCode = key.substring(key.indexOf(':') + 1);
-                totalRemoved += geoIndexService.cleanupExpired(countryCode, cutoff);
+                // The scan also returns the companion keys of each partition; only an index
+                // key identifies a partition.
+                var countryCode = keyStrategy.countryCodeOf(cursor.next());
+                if (countryCode.isPresent()) {
+                    totalRemoved += geoIndexService.cleanupExpired(countryCode.get(), cutoff);
+                }
             }
         }
 

@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Request payload for {@code POST /enrollment/public/v1/enrollments}, and the REST channel's
@@ -41,10 +42,13 @@ public record EnrollmentRequest(
             String postalCode,
             String city,
             String subregion,
-            @NotBlank String countryCode
+            @NotNull @IsoCountryCode String countryCode
     ) {
         public AddressDto {
             streetLines = streetLines == null ? List.of() : List.copyOf(streetLines);
+            // The country code selects the geo-index partition downstream. One spelling per
+            // country keeps every enrollment of a country in the same partition.
+            countryCode = countryCode == null ? null : countryCode.toUpperCase(Locale.ROOT);
         }
     }
 }

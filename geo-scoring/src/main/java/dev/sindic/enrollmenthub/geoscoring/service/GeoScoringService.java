@@ -37,11 +37,12 @@ public class GeoScoringService {
 
         GeoScoreResult event;
         if (coordinates != null) {
-            var indexMember = UUID.randomUUID().toString();
+            // The enrollment ID is the index member: a redelivered or replayed request is
+            // recognised by it and answered with the counts of its first run.
             var densityResult = geoIndexService.checkAndIndex(
                     shippingAddress.countryCode(),
                     coordinates.longitude(), coordinates.latitude(),
-                    indexMember);
+                    enrollmentId.toString());
             event = geoIndexService.toEvent(enrollmentId, densityResult);
         } else {
             log.warn("Geocoding failed — emitting no-result signal state");

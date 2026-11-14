@@ -1,12 +1,16 @@
 package dev.sindic.enrollmenthub.decisionengine.api;
 
 import dev.sindic.enrollmenthub.decisionengine.config.SecurityConfiguration;
+import dev.sindic.enrollmenthub.decisionengine.domain.EnrollmentCommand;
 import dev.sindic.enrollmenthub.decisionengine.domain.PendingEnrollmentResponse;
 import dev.sindic.enrollmenthub.decisionengine.security.PrerequisiteTokenValidator;
 import dev.sindic.enrollmenthub.decisionengine.security.PrerequisiteValidationException;
 import dev.sindic.enrollmenthub.decisionengine.service.EnrollmentIntakeService;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -22,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.mockito.ArgumentMatchers.any;
@@ -184,6 +189,56 @@ class EnrollmentControllerTest {
                 .andExpect(jsonPath("$.fieldErrors[*].field", hasItem("shippingAddress.countryCode")));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"ZZ", "XK", "DEU", "D", "D1", " DE", "{DE}"})
+    void returns400WhenCountryCodeIsNotAnAssignedIsoCode(String countryCode) throws Exception {
+        Map<String, Object> body = validBody();
+        body.put("billingAddress", addressIn(countryCode));
+
+        mockMvc.perform(post(ENDPOINT)
+                        .with(writeScope())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[*].field", hasItem("billingAddress.countryCode")));
+
+        then(enrollmentService).shouldHaveNoInteractions();
+    }
+
+    @Test
+    void returns400WhenCountryCodeIsMissing() throws Exception {
+        Map<String, Object> body = validBody();
+        body.put("shippingAddress", Map.of("streetLines", List.of("1 Main St"), "city", "Berlin"));
+
+        mockMvc.perform(post(ENDPOINT)
+                        .with(writeScope())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[*].field", hasItem("shippingAddress.countryCode")));
+    }
+
+    @Test
+    void lowerCaseCountryCodeIsAcceptedAndReachesTheServiceInUpperCase() throws Exception {
+        given(enrollmentService.receiveEnrollment(any()))
+                .willReturn(new PendingEnrollmentResponse(UUID.randomUUID().toString()));
+        Map<String, Object> body = validBody();
+        body.put("shippingAddress", addressIn("de"));
+        body.put("billingAddress", addressIn("nl"));
+
+        mockMvc.perform(post(ENDPOINT)
+                        .with(writeScope())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isAccepted());
+
+        // The geo-index is partitioned by this value; "de" and "DE" must select one partition.
+        var command = ArgumentCaptor.forClass(EnrollmentCommand.class);
+        then(enrollmentService).should().receiveEnrollment(command.capture());
+        assertThat(command.getValue().shippingAddress().countryCode()).isEqualTo("DE");
+        assertThat(command.getValue().billingAddress().countryCode()).isEqualTo("NL");
+    }
+
     @Test
     void returns400ForEmptyBody() throws Exception {
         mockMvc.perform(post(ENDPOINT)
@@ -194,14 +249,18 @@ class EnrollmentControllerTest {
                 .andExpect(jsonPath("$.fieldErrors").isArray());
     }
 
-    private static Map<String, Object> validBody() {
-        Map<String, Object> address = Map.of(
+    private static Map<String, Object> addressIn(String countryCode) {
+        return Map.of(
                 "streetLines", List.of("1 Main St"),
                 "postalCode", "10115",
                 "city", "Berlin",
                 "subregion", "BE",
-                "countryCode", "DE"
+                "countryCode", countryCode
         );
+    }
+
+    private static Map<String, Object> validBody() {
+        Map<String, Object> address = addressIn("DE");
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("paymentType", "CREDIT_CARD");
         body.put("person", Map.of(

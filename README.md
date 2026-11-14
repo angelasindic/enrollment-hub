@@ -107,7 +107,8 @@ enum value — no DDL migration, no entity field change. Routing and completion 
 geocodes them via self-hosted Nominatim, and indexes the coordinates using an atomic Lua script (GEOSEARCH + GEOADD)
 with a 48-hour per-member TTL. Enrollment density is computed across multiple configurable radii; saturating the
 Redis `COUNT 200` result cap produces `RiskLevel.EXTREME` — a first-class risk level treated distinctly from `HIGH`.
-A sorted-set companion index drives per-member eviction via a scheduled cleanup job.
+A sorted-set companion index drives per-member eviction via a scheduled cleanup job. The script is idempotent per
+enrollment: a redelivered request is answered with the counts of its first run.
 
 **GDPR-motivated data architecture.** Prerequisite rejections never touch the database. Only requests that cross
 into the pipeline create correlation records, satisfying GDPR data minimisation. The 48-hour TTL on the geo-index

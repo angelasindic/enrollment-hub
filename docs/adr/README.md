@@ -14,7 +14,7 @@ One file per decision, numbered in the order the decisions were taken. Each reco
 | [ADR-08](08-fixed-radius-not-dbscan.md) | Density Detection Algorithm | Fixed-radius `GEOSEARCH` counts; DBSCAN rejected | Accepted |
 | [ADR-09](09-pluggable-geocoding-provider.md) | Geocoding Provider | Self-hosted Nominatim; the provider interface is a test seam | Accepted |
 | [ADR-10](10-libpostal-address-normalization.md) | Address Normalization via Libpostal | A libpostal sidecar builds the canonical cache key | Accepted |
-| [ADR-11](11-atomic-geo-density-lua-script.md) | Atomic Redis Geo-Index | One Lua script for the check and the write; per-member TTL | Accepted |
+| [ADR-11](11-atomic-geo-density-lua-script.md) | Atomic Redis Geo-Index | One Lua script for the check and the write, idempotent per enrollment; per-member TTL | Accepted |
 | [ADR-12](12-ttl-as-architectural-asset.md) | 48-Hour TTL as Architectural Asset | The TTL is the detection window, not only a storage limit | Accepted |
 | [ADR-13](13-decision-engine-messaging-architecture.md) | Decision Engine Messaging Architecture | Four exchanges; intake inversion with a `PENDING → COMPLETED` ledger | Accepted |
 | [ADR-14](14-signal-classification-model.md) | Signal Classification Model | Aggregate by classification; a scoring signal cannot reject | Accepted |

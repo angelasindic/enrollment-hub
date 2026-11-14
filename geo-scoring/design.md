@@ -50,7 +50,8 @@ the list of triggered radii, the geocoded `(latitude, longitude)` when available
 when `riskLevel` is null.
 
 **External dependencies:** libpostal (sidecar, address normalisation — ADR-10), Nominatim (self-hosted geocoder —
-ADR-09), Redis/Valkey (geocoding cache, geo-index, TTL companion ZSET), RabbitMQ (event bus — ADR-13).
+ADR-09), Redis/Valkey (geocoding cache, geo-index with its TTL companion ZSET and counts hash), RabbitMQ (event bus —
+ADR-13).
 
 ---
 
@@ -77,15 +78,32 @@ rejected: they add a second live secret and a fallback read on every miss, purch
 only on suspected compromise — where wholesale invalidation is acceptable. The pepper is not a credential to any
 external system, so no calendar rotation applies.
 
+**Structures per country.** Each country partition consists of three keys. The member, the `enrollmentId`, is the
+same in all three and ties the entries of one enrollment together.
+
+```
+geo:{DE}          e-1 → (13.4050, 52.5200)                              GEO set: position
+                  e-2 → (13.4051, 52.5200)
+
+geo:{DE}:ttl      e-1 → 1794600000                                      sorted set: insertion epoch in seconds
+                  e-2 → 1794600420
+
+geo:{DE}:counts   e-1 → {"radii":[100,250,500],"counts":[0,0,0]}        hash: neighbor counts of the first run
+                  e-2 → {"radii":[100,250,500],"counts":[1,1,1]}
+```
+
+`geo-density.lua` writes one entry per enrollment into all three in one atomic step; `geo-cleanup.lua` removes it from
+all three once the TTL has passed.
+
 **Geo-index** — country-partitioned Redis GEO sorted sets, keyed `geo:{countryCode}` (e.g. `geo:{DE}`). Each ZSET member
-is a `enrollmentId` (the per-enrollment correlation UUID — see ADR-11); its score is the 52-bit geohash of the
+is an `enrollmentId` (the per-enrollment correlation UUID — see ADR-11); its score is the 52-bit geohash of the
 enrollment's `(lon, lat)` computed by `GEOADD`. Coordinates are therefore encoded into the score rather than stored
 as a separate value — `GEOPOS` reverses the geohash back to approximate coordinates, and `GEOSEARCH` exploits the
 fact that geohash-adjacent scores correspond to geographically nearby points. Member uniqueness is per
-`(key, enrollmentId)`: an idempotent retry of the same request overwrites (moves) its point, but two distinct
-enrollments at the same building coexist as separate members with near-identical scores — which is precisely the
-density signal the service detects. Because each enrollment carries a fresh `enrollmentId`, a single account that
-enrolls twice within the TTL window appears as two separate members. Purpose: density detection. Contains
+`(key, enrollmentId)`: a repeated request for the same enrollment is answered from the counts hash and writes nothing,
+but two distinct enrollments at the same building coexist as separate members with near-identical scores — which is
+precisely the density signal the service detects. Because each enrollment carries a fresh `enrollmentId`, a single
+account that enrolls twice within the TTL window appears as two separate members. Purpose: density detection. Contains
 enrollment identifiers linked to locations with implicit temporal information (48-hour TTL). This *is* personal
 data — the combination of an identifiable enrollment, a location, and a time window. The 48-hour TTL (ADR-12)
 provides automatic expiration; ±5m Laplacian noise on coordinates is described as an optional mitigation in
@@ -96,22 +114,36 @@ architecture.md §8.2 but is **not implemented in v0** — current density detec
 **insertion epoch in seconds**. It exists solely to track per-member age so the geo-index can honour a per-member TTL
 (Redis GEO sorted sets have no native per-member expiry — a key-level TTL would expire the entire country partition at
 once, which is not the intended behaviour). The companion set mirrors the geo-index's membership but carries no
-coordinates; it is written atomically alongside every `GEOADD` in `scripts/geo-density.lua` (`ZADD ttlKey epoch
-member`) and consumed by a scheduled batched Lua cleanup job (`scripts/geo-cleanup.lua`, `GeoIndexCleanupJob`) which
-runs `ZRANGEBYSCORE ttlKey 0 <now − ttl>` to find expired members and `ZREM`s them from **both** keys — see **ADR-11**.
+coordinates; it is written atomically alongside every `GEOADD` in `scripts/geo-density.lua` (`ZADD ttlKey NX epoch
+member`; `NX` keeps the first insertion time, so a later write cannot extend a member's lifetime) and consumed by a
+scheduled batched Lua cleanup job (`scripts/geo-cleanup.lua`, `GeoIndexCleanupJob`) which runs
+`ZRANGEBYSCORE ttlKey -inf <now − ttl>` to find expired members and removes them from the geo-index, the companion
+set and the counts hash — see **ADR-11**.
 With the default 48h TTL and 1h cleanup interval the worst-case effective member lifetime is 49h, which preserves
 ADR-12's 48h TTL property and its false-positive mitigation argument. PII profile: same as the geo-index (identifies
 an enrollment within a time window), so it shares the geo-index's protections (48h expiry, country partitioning).
 
+**Counts hash** — plain Redis hash, keyed `{prefix}:{countryCode}:counts` (default: `geo:{DE}:counts`). Each field is
+an `enrollmentId`; the value is a JSON object holding the radii of that enrollment's first density check and the
+neighbor count per radius (`{"radii":[100,250,500],"counts":[0,1,2]}`). `scripts/geo-density.lua` reads it before
+searching: a repeated request with the same radii returns the stored counts and writes nothing, which makes the index
+step idempotent under listener retries, command re-dispatch and DLQ replay — see **ADR-11**. The field is written in
+the same script as the `GEOADD` and removed by `scripts/geo-cleanup.lua` together with the member, so its lifetime
+equals that of the point. A request with different radii is not a repeat: the script counts again and replaces the
+entry. The radii come from configuration, so this occurs only after a configuration change, and the recount includes
+the enrollment's own point, indexed by the first run. PII profile: same as the geo-index.
+
 ### Geo-Index Key Strategy
 
-Keys follow the pattern `<prefix>:{<countryCode>}` (e.g. `geo:{DE}`, `geo:{MC}`), and the TTL companion appends
-`:ttl` (e.g. `geo:{DE}:ttl`). The prefix is configurable via `geo-index.key-prefix`.
+Keys follow the pattern `<prefix>:{<countryCode>}` (e.g. `geo:{DE}`, `geo:{MC}`); the TTL companion appends `:ttl`
+(e.g. `geo:{DE}:ttl`) and the counts hash appends `:counts` (e.g. `geo:{DE}:counts`). The prefix is configurable via
+`geo-index.key-prefix`.
 
 The country code is wrapped in a Redis hash tag, the `{...}` portion Redis Cluster hashes for slot routing. The
-shared tag forces a partition's geo-index key and its `:ttl` companion onto the same cluster slot, which keeps the
-multi-key density and cleanup Lua scripts cross-slot-safe under Redis Cluster (ADR-11). On a single instance the tag
-is inert. `GeoIndexKeyStrategy` builds both keys and is the single source of truth for this format.
+shared tag forces a partition's geo-index key, its `:ttl` companion and its `:counts` hash onto the same cluster slot,
+which keeps the multi-key density and cleanup Lua scripts cross-slot-safe under Redis Cluster (ADR-11). On a single
+instance the tag is inert. `GeoIndexKeyStrategy` builds all three keys, maps an index key back to its country code for
+the cleanup job, and is the single source of truth for this format.
 
 **Partitioning: per country (ISO 3166-1 alpha-2).**
 
@@ -122,9 +154,12 @@ Rationale:
   cross-border clustering (twin cities, commuter towns) would otherwise trigger false flags.
 - **Keeps sets manageable.** A single global GEO set would grow to contain every account indexed in the past 48 hours.
   Country partitioning bounds each set to the volume of a single market, keeping GEOSEARCH fast.
-- **Natural alignment with the domain.** `countryCode` is a mandatory, validated field on every `Address` record
-  (see `contracts` module). The orchestrator rejects requests with missing or unrecognised country codes before
-  the `geo.score` command is dispatched, so the partition key is always well-defined when geo-scoring executes.
+- **Natural alignment with the domain.** `countryCode` is mandatory on every `Address` record (see `contracts`
+  module). The decision-engine validates it at the REST boundary as an officially assigned ISO 3166-1 alpha-2 code
+  and normalizes it to upper case (`EnrollmentRequest.AddressDto`, `@IsoCountryCode`), so a request with a missing or
+  unrecognised code is rejected with `400` before a `geo.score` command exists, and every spelling of a country
+  selects the same partition. Geo-scoring does not validate the code again; the decision-engine is the only producer
+  of its commands.
 
 `GeoIndexKeyStrategy` is the single source of truth for key generation — all geo-index consumers (density check,
 indexing) must use it rather than constructing keys inline.
@@ -173,25 +208,35 @@ This atomicity completely eliminates the concurrent GEOSEARCH/GEOADD race condit
 
 The Lua script performs, in order:
 
-1. GEOSEARCH at each configured radius (default: 100m, 250m, 500m) with a COUNT cap (default: 200)
-2. GEOADD to index the new point unconditionally
+1. A lookup of the `enrollmentId` in the counts hash. If an entry with the same radii exists, the script returns its
+   counts and ends: a repeated request neither searches nor writes.
+2. GEOSEARCH at each configured radius (default: 100m, 250m, 500m) with a COUNT cap (default: 200)
+3. GEOADD to index the new point, ZADD NX to record its insertion time, HSET to store the counts
 
 ```
 -- Executed atomically within Redis (no interleaving possible)
 KEYS[1] = geo:{countryCode}          -- GEO sorted set
 KEYS[2] = geo:{countryCode}:ttl      -- TTL companion sorted set
+KEYS[3] = geo:{countryCode}:counts   -- counts hash
+
+stored = HGET KEYS[3] enrollmentId
+if stored and stored.radii == radii:
+    → return stored.counts                  -- repeated request: no search, no write
 
 for each radius in [100, 250, 500]:
     count = #GEOSEARCH KEYS[1] FROMLONLAT lon lat BYRADIUS radius m ASC COUNT 200
-    → return count
 
-GEOADD KEYS[1] lon lat enrollmentId     -- index the new point
-ZADD   KEYS[2] epoch    enrollmentId    -- record insertion time for per-member TTL
+GEOADD KEYS[1] lon lat enrollmentId         -- index the new point
+ZADD   KEYS[2] NX epoch enrollmentId        -- record the first insertion time for per-member TTL
+HSET   KEYS[3] enrollmentId {radii, counts} -- keep the answer for a repeated request
+→ return counts
 ```
 
 The score-before-index ordering is preserved *within* the atomic script: GEOSEARCH runs first (avoiding self-counting),
-then GEOADD indexes the point. Crash recovery remains simple — if the script fails mid-execution, Redis discards all
-side effects and a retry re-runs the entire operation.
+then GEOADD indexes the point. Atomicity here means isolation from other clients, not rollback: Redis does not undo
+the commands a script has already executed when a later one fails. The three writes are the last commands of the
+script, so a failure before them leaves the partition unchanged. A failure between them leaves the point indexed
+without stored counts; a retry then counts again and includes that point.
 
 Threshold comparison happens in Java (`GeoIndexService.buildResult`) after the script returns the count array. This
 keeps the Lua script simple and means configuration changes (radii, thresholds) don't require script updates.
@@ -265,8 +310,8 @@ risk level rather than a separate flag.
 
 **Intra-script TOCTOU note:** The three GEOSEARCH queries within the Lua script execute against the same snapshot — no
 concurrent GEOADD can interleave because the Lua script holds exclusive execution. The only remaining TOCTOU is between
-*separate* Lua script invocations (different accounts), which is the intended design: each account sees the index as it
-was at the moment its script began executing.
+*separate* Lua script invocations (different enrollments), which is the intended design: each enrollment sees the index
+as it was at the moment its script began executing.
 
 ---
 
@@ -276,12 +321,13 @@ The geo-index honours its per-member TTL via `GeoIndexCleanupJob`, a `@Scheduled
 fixed delay (default `geo-index.cleanup-interval = PT1H`). On each tick:
 
 1. Compute the cutoff: `Instant.now().minus(geo-index.ttl)` (default 48 h ago).
-2. Discover active country partitions with Redis `SCAN MATCH {prefix}:*` (count 100). Keys ending in `:ttl` are
-   skipped — those are companion sets, not geo-index keys.
+2. Discover active country partitions with Redis `SCAN MATCH {prefix}:*` (count 100). The scan also returns the
+   `:ttl` and `:counts` companions of each partition; `GeoIndexKeyStrategy.countryCodeOf` yields a country code for
+   an index key only, so the companions are skipped.
 3. For each discovered partition, call `GeoIndexService.cleanupExpired(countryCode, cutoff)`, which loops the
    `scripts/geo-cleanup.lua` script until it returns less than `cleanup-batch-size` (default 1000) members.
-   Each Lua invocation does `ZRANGEBYSCORE ttlKey -inf cutoff LIMIT 0 batch` then `ZREM` from **both** the geo
-   key and the TTL companion atomically.
+   Each Lua invocation does `ZRANGEBYSCORE ttlKey -inf cutoff LIMIT 0 batch`, then `ZREM` from the geo key and the
+   TTL companion and `HDEL` from the counts hash, atomically.
 
 **Falling-behind behaviour.** If the job is paused or under-scaled, expired members linger in the geo-index past
 the configured TTL. The bias is conservative: stale members inflate neighbour counts, biasing toward `HIGH` /
@@ -345,18 +391,19 @@ still bounded per message, but loud enough that a circuit breaker becomes the na
    prior "swallow every `Exception`" pattern that masked Nominatim outages as `NO_RESULT`.
 
 **Redis failures** in the Lua script path *are* exceptions. `GeoIndexService.checkAndIndex` catches
-`DataAccessException`, logs it, and re-throws unchanged so the retry chain handles transient outages. The Lua
-script's atomicity guarantees that a mid-execution failure leaves the index in its pre-call state — retries are
-safe and idempotent for the same `enrollmentId` (member uniqueness in the GEO sorted set means a retry overwrites
-rather than duplicates).
+`DataAccessException`, logs it, and re-throws unchanged so the retry chain handles transient outages. The retry is
+safe in both outcomes of a lost connection: if the script did not run, the retry is a first run; if it ran and only
+the reply was lost, the retry finds the enrollment in the counts hash and returns the counts of that run.
 
-**Duplicate requests are idempotent by design.** A duplicate `geo.score` command — e.g. a partial-publish redelivery
-from the decision engine — is cheap and safe without an explicit dedup guard: (1) the address-keyed geocoding cache
-turns the repeat into a cache hit, so no Nominatim call; (2) `GEOADD` re-indexes the same `enrollmentId` member,
-updating its position without double-counting density; and (3) the resulting duplicate `GeoScoreResult` is discarded by
-the decision engine's "already settled" idempotency guard (ADR-16). Note there is no inbound dedup check in
-geo-scoring — this safety is an emergent property of those three behaviours, not a single guard, which is worth knowing
-before changing any one of them.
+**Duplicate requests are idempotent.** A duplicate `geo.score` command arrives through a listener retry after a failed
+result publish, a re-dispatch by the decision engine, or a DLQ replay. Each of the three steps it passes through is
+safe to repeat: (1) the address-keyed geocoding cache turns the repeat into a cache hit, so no Nominatim call; (2)
+`scripts/geo-density.lua` finds the `enrollmentId` in the counts hash and returns the counts of the first run without
+searching or writing, so the index gains no second point and the answer does not count the enrollment's own point; and
+(3) the resulting duplicate `GeoScoreResult` is discarded by the decision engine's "already settled" idempotency guard
+(ADR-16). The listener has no inbound dedup check; the guard is step (2), inside the script, where the lookup and the
+index write are one atomic step. The stored value is the counts, not the risk level: thresholds are applied in Java on
+every call, so a threshold change between the first run and a repeat changes the derived level.
 
 **Outbound (publisher side, `GeoScoreResultPublisher`).** The RabbitTemplate is configured with publisher confirms
 (`publisher-confirm-type: correlated`) and mandatory publishing with a returns callback. A nack or an unroutable

@@ -48,8 +48,9 @@ queue, the routing key, and the rejection count. Correlate with service logs via
   original exchange with the original routing key.
 
 Replay is safe to repeat: every consumer is an idempotent receiver (intake dedups on
-`enrollmentId` via the ledger; result handlers discard already-settled signals — ADR-13,
-ADR-16), so a double replay converges to one effect.
+`enrollmentId` via the ledger; result handlers discard already-settled signals; geo-scoring
+answers a repeated command with the counts stored by its first run and adds nothing to the
+geo-index — ADR-11, ADR-13, ADR-16), so a double replay converges to one effect.
 
 **4. Discard** (poison pills only): *Purge* on the DLQ page, after step 2's record is saved.
 
