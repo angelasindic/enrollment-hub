@@ -2,7 +2,6 @@ package dev.sindic.enrollmenthub.decisionengine;
 
 import dev.sindic.enrollmenthub.decisionengine.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.persistence.EnrollmentEntity;
-import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -12,8 +11,6 @@ import java.util.UUID;
  * do not care about the {@code originalRequest} content.
  */
 public final class TestEntityFactory {
-
-    private static final JsonMapper MAPPER = JsonMapper.builder().findAndAddModules().build();
 
     // Minimal valid JSON for originalRequest in tests that don't assert on its content.
     // Templated so each entity carries its own enrollmentId, matching the EnrollmentData contract.

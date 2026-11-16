@@ -19,7 +19,7 @@ class GeoScoreRequestListener {
 
     private final GeoScoringService geoScoringService;
 
-    public GeoScoreRequestListener(GeoScoringService geoScoringService) {
+    GeoScoreRequestListener(GeoScoringService geoScoringService) {
         this.geoScoringService = geoScoringService;
     }
 

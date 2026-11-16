@@ -56,18 +56,24 @@ public final class DecisionEngine {
             }
             switch (config.classification()) {
                 case BEST_EFFORT, REQUIRED -> {
-                    if (state instanceof SignalState.Checked(var outcome) && outcome == CheckOutcome.FAILED)
+                    if (state instanceof SignalState.Checked(var outcome) && outcome == CheckOutcome.FAILED) {
                         rejected = true;
+                    }
                 }
                 case SCORING_SIGNAL -> {
                     if (state instanceof SignalState.Scored(var riskLevel) &&
-                            (riskLevel == RiskLevel.HIGH || riskLevel == RiskLevel.EXTREME))
+                            (riskLevel == RiskLevel.HIGH || riskLevel == RiskLevel.EXTREME)) {
                         reviewRequired = true;
+                    }
                 }
             }
         }
-        if (rejected)        return DecisionResult.REJECTED;
-        if (reviewRequired)  return DecisionResult.CONDITIONAL_APPROVED;
+        if (rejected) {
+            return DecisionResult.REJECTED;
+        }
+        if (reviewRequired) {
+            return DecisionResult.CONDITIONAL_APPROVED;
+        }
         return DecisionResult.APPROVED;
     }
 }

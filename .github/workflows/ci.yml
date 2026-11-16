@@ -19,60 +19,7 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
-    outputs:
-      list: ${{ steps.resolve.outputs.list }}
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
-        with:
-          node-version-file: 'ci/.nvmrc'
-          cache: 'npm'
-          cache-dependency-path: ci/package-lock.json
-      - name: Install CI script dependencies
-        run: npm ci --prefix ci
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
-        id: filter
-        with:
-          filters: |
-            contracts:
-              - 'pom.xml'
-              - 'contracts/**'
-            authorization-server:
-              - 'authorization-server/**'
-            geo-scoring:
-              - 'geo-scoring/**'
-            fraud-detection:
-              - 'fraud-detection/**'
-            account-service:
-              - 'account-service/**'
-            decision-engine:
-              - 'decision-engine/**'
-            gateway:
-              - 'gateway/**'
-
-      - name: Resolve modules
-        id: resolve
-        env:
-          FILTER_CONTRACTS: ${{ steps.filter.outputs.contracts }}
-          FILTER_AUTHORIZATION_SERVER: ${{ steps.filter.outputs.authorization-server }}
-          FILTER_GEO_SCORING: ${{ steps.filter.outputs.geo-scoring }}
-          FILTER_FRAUD_DETECTION: ${{ steps.filter.outputs.fraud-detection }}
-          FILTER_ACCOUNT_SERVICE: ${{ steps.filter.outputs.account-service }}
-          FILTER_DECISION_ENGINE: ${{ steps.filter.outputs.decision-engine }}
-          FILTER_GATEWAY: ${{ steps.filter.outputs.gateway }}
-        run: ci/node_modules/.bin/tsx ci/scripts/resolve-modules.ts
-      - name: Debug filter outputs
-        run: |
-          echo "Event: ${{ github.event_name }}"
-          echo "Filter contracts: ${{ steps.filter.outputs.contracts }}"
-          echo "Filter authorization-server: ${{ steps.filter.outputs.authorization-server }}"
-          echo "Filter geo-scoring: ${{ steps.filter.outputs.geo-scoring }}"
-          echo "Filter fraud-detection: ${{ steps.filter.outputs.fraud-detection }}"
-          echo "Filter account-service: ${{ steps.filter.outputs.account-service }}"
-          echo "Filter decision-engine: ${{ steps.filter.outputs.decision-engine }}"
-          echo "Filter gateway: ${{ steps.filter.outputs.gateway }}"
-          echo "Resolved list: ${{ steps.resolve.outputs.list }}"
+    uses: ./.github/workflows/changes.yml
 
   build-test:
     needs: changes
@@ -81,35 +28,25 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v5
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
+      - uses: ./.github/actions/setup-java-maven
 
-      - name: Build, unit test, and install
+      - name: Build, unit and integration tests
         run: |
-          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am install -DskipITs --batch-mode --no-transfer-progress
+          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am verify --batch-mode --no-transfer-progress
 
-      - name: Integration tests
+      - uses: ./.github/actions/publish-test-reports
+
+  static-analysis:
+    needs: changes
+    if: needs.changes.outputs.list != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: ./.github/actions/setup-java-maven
+
+      # The quality profile binds Checkstyle to validate and PMD to process-test-classes: PMD gets the
+      # compiled classes for type resolution, and -am puts sibling modules in the reactor.
+      - name: Checkstyle and PMD
         run: |
-          ./mvnw -pl "${{ needs.changes.outputs.list }}" failsafe:integration-test failsafe:verify --batch-mode --no-transfer-progress
-
-      # ── Test Reports ─────────────────────────────────────────────
-      - name: Publish unit test report
-        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
-        if: success() || failure()    # run even if tests fail
-        with:
-          name: Unit Tests
-          path: '*/target/surefire-reports/TEST-*.xml'
-          reporter: java-junit
-          fail-on-empty: false    # a changed module may have only ITs (no surefire unit tests)
-
-      - name: Publish integration test report
-        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
-        if: success() || failure()
-        with:
-          name: Integration Tests
-          path: '*/target/failsafe-reports/TEST-*.xml'
-          reporter: java-junit
-          fail-on-empty: false
+          ./mvnw -pl "${{ needs.changes.outputs.list }}" -am process-test-classes -Pquality --batch-mode --no-transfer-progress --fail-at-end

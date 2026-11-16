@@ -1,0 +1,69 @@
+name: Changes
+
+on:
+  workflow_call:
+    outputs:
+      list:
+        description: Comma-separated Maven modules to build
+        value: ${{ jobs.resolve.outputs.list }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.resolve.outputs.list }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version-file: 'ci/.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: ci/package-lock.json
+      - name: Install CI script dependencies
+        run: npm ci --prefix ci
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
+        id: filter
+        with:
+          filters: |
+            contracts:
+              - 'pom.xml'
+              - 'contracts/**'
+            authorization-server:
+              - 'authorization-server/**'
+            geo-scoring:
+              - 'geo-scoring/**'
+            fraud-detection:
+              - 'fraud-detection/**'
+            account-service:
+              - 'account-service/**'
+            decision-engine:
+              - 'decision-engine/**'
+            gateway:
+              - 'gateway/**'
+
+      - name: Resolve modules
+        id: resolve
+        env:
+          FILTER_CONTRACTS: ${{ steps.filter.outputs.contracts }}
+          FILTER_AUTHORIZATION_SERVER: ${{ steps.filter.outputs.authorization-server }}
+          FILTER_GEO_SCORING: ${{ steps.filter.outputs.geo-scoring }}
+          FILTER_FRAUD_DETECTION: ${{ steps.filter.outputs.fraud-detection }}
+          FILTER_ACCOUNT_SERVICE: ${{ steps.filter.outputs.account-service }}
+          FILTER_DECISION_ENGINE: ${{ steps.filter.outputs.decision-engine }}
+          FILTER_GATEWAY: ${{ steps.filter.outputs.gateway }}
+        run: ci/node_modules/.bin/tsx ci/scripts/resolve-modules.ts
+      - name: Debug filter outputs
+        run: |
+          echo "Event: ${{ github.event_name }}"
+          echo "Filter contracts: ${{ steps.filter.outputs.contracts }}"
+          echo "Filter authorization-server: ${{ steps.filter.outputs.authorization-server }}"
+          echo "Filter geo-scoring: ${{ steps.filter.outputs.geo-scoring }}"
+          echo "Filter fraud-detection: ${{ steps.filter.outputs.fraud-detection }}"
+          echo "Filter account-service: ${{ steps.filter.outputs.account-service }}"
+          echo "Filter decision-engine: ${{ steps.filter.outputs.decision-engine }}"
+          echo "Filter gateway: ${{ steps.filter.outputs.gateway }}"
+          echo "Resolved list: ${{ steps.resolve.outputs.list }}"

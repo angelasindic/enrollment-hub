@@ -30,6 +30,7 @@
 		<spring-cloud.version>2025.1.3</spring-cloud.version>
 		<springdoc.version>2.8.6</springdoc.version>
 		<skipITs>false</skipITs>
+		<pmd.version>7.29.0</pmd.version>
 	</properties>
 
 	<dependencies>
@@ -120,7 +121,96 @@
 					</systemPropertyVariables>
 				</configuration>
 			</plugin>
+			<!-- Static analysis: configuration only. The checks are bound to the lifecycle by the quality profile. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-checkstyle-plugin</artifactId>
+				<version>3.6.0</version>
+				<dependencies>
+					<dependency>
+						<groupId>com.puppycrawl.tools</groupId>
+						<artifactId>checkstyle</artifactId>
+						<version>14.4.0</version>
+					</dependency>
+				</dependencies>
+				<configuration>
+					<configLocation>${maven.multiModuleProjectDirectory}/config/checkstyle.xml</configLocation>
+					<includeTestSourceDirectory>true</includeTestSourceDirectory>
+					<consoleOutput>true</consoleOutput>
+					<violationSeverity>warning</violationSeverity>
+					<failOnViolation>true</failOnViolation>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-pmd-plugin</artifactId>
+				<version>3.28.0</version>
+				<dependencies>
+					<!-- Pin PMD explicitly; the plugin's bundled version may predate Java 25 support. -->
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-core</artifactId>
+						<version>${pmd.version}</version>
+					</dependency>
+					<dependency>
+						<groupId>net.sourceforge.pmd</groupId>
+						<artifactId>pmd-java</artifactId>
+						<version>${pmd.version}</version>
+					</dependency>
+				</dependencies>
+				<configuration>
+					<rulesets>
+						<ruleset>${maven.multiModuleProjectDirectory}/config/pmd-ruleset.xml</ruleset>
+					</rulesets>
+					<includeTests>true</includeTests>
+					<printFailingErrors>true</printFailingErrors>
+					<failOnViolation>true</failOnViolation>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!--
+		  Static analysis. Plugin versions and configuration live in <build> above; this profile only
+		  binds the checks to the lifecycle. Checkstyle reads sources, so it runs first. PMD needs the
+		  compiled classes for type resolution and runs after test-compile. Neither needs the tests, so
+		  `./mvnw process-test-classes -Pquality` checks without running them, while
+		  `./mvnw verify -Pquality` does everything.
+		-->
+		<profile>
+			<id>quality</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-checkstyle-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>checkstyle</id>
+								<phase>validate</phase>
+								<goals>
+									<goal>check</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-pmd-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>pmd</id>
+								<phase>process-test-classes</phase>
+								<goals>
+									<goal>check</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 
 </project>

@@ -86,25 +86,26 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
 
         var locked = new CountDownLatch(1);
         var release = new CountDownLatch(1);
-        ExecutorService holder = Executors.newSingleThreadExecutor();
-        try {
-            holder.submit(() -> txTemplate.executeWithoutResult(status -> {
-                repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
-                locked.countDown();
-                awaitQuietly(release);
-            }));
-            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+        try (ExecutorService holder = Executors.newSingleThreadExecutor()) {
+            try {
+                holder.submit(() -> txTemplate.executeWithoutResult(_ -> {
+                    repository.findByEnrollmentIdForUpdate(enrollmentId).orElseThrow();
+                    locked.countDown();
+                    awaitQuietly(release);
+                }));
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
 
-            // Would deadlock here if the claim waited on the held row instead of skipping it.
-            retentionJob.stripDispatchedPayloads();
+                // Would deadlock here if the claim waited on the held row instead of skipping it.
+                retentionJob.stripDispatchedPayloads();
 
-            assertThat(repository.findById(enrollmentId).orElseThrow().getOriginalRequest())
-                    .as("a row held by another transaction is skipped, not stripped")
-                    .isNotNull();
-        } finally {
-            release.countDown();
-            holder.shutdown();
-            assertThat(holder.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+                assertThat(repository.findById(enrollmentId).orElseThrow().getOriginalRequest())
+                        .as("a row held by another transaction is skipped, not stripped")
+                        .isNotNull();
+            } finally {
+                release.countDown();
+                holder.shutdown();
+                assertThat(holder.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+            }
         }
 
         // Once the lock is gone the same row is ordinary work again.
@@ -130,26 +131,27 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
         }
 
         var stop = new AtomicBoolean(false);
-        ExecutorService retention = Executors.newSingleThreadExecutor();
-        try {
-            retention.submit(() -> {
-                while (!stop.get()) {
-                    retentionJob.stripDispatchedPayloads();
-                }
-            });
-            // One batch need not cover the 25 rows. The database is shared across IT classes, so the
-            // outbox can hold rows another class left undispatched, and the scheduled sweep runs once
-            // at context start whatever its interval, so its relay can hold some of these rows in
-            // its own transaction. Relay until every seeded row is stamped.
-            await().atMost(Duration.ofSeconds(20)).until(() -> {
-                dispatcher.dispatchPending(OUTBOX_ROWS);
-                return ids.stream().allMatch(id ->
-                        repository.findById(id).orElseThrow().getDispatchedAt() != null);
-            });
-        } finally {
-            stop.set(true);
-            retention.shutdown();
-            assertThat(retention.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+        try (ExecutorService retention = Executors.newSingleThreadExecutor()) {
+            try {
+                retention.submit(() -> {
+                    while (!stop.get()) {
+                        retentionJob.stripDispatchedPayloads();
+                    }
+                });
+                // One batch need not cover the 25 rows. The database is shared across IT classes, so the
+                // outbox can hold rows another class left undispatched, and the scheduled sweep runs once
+                // at context start whatever its interval. Its relay can hold some of these rows in
+                // its own transaction. Relay until every seeded row is stamped.
+                await().atMost(Duration.ofSeconds(20)).until(() -> {
+                    dispatcher.dispatchPending(OUTBOX_ROWS);
+                    return ids.stream().allMatch(id ->
+                            repository.findById(id).orElseThrow().getDispatchedAt() != null);
+                });
+            } finally {
+                stop.set(true);
+                retention.shutdown();
+                assertThat(retention.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+            }
         }
 
         // Every decision reached the exchange as a complete event. The event record rejects a null
@@ -162,7 +164,7 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
     // ── fixtures ──────────────────────────────────────────────────────────────
 
     private void seedDecided(UUID enrollmentId, UUID decisionId) {
-        txTemplate.executeWithoutResult(status -> {
+        txTemplate.executeWithoutResult(_ -> {
             repository.saveAndFlush(TestEntityFactory.creditCard(
                     enrollmentId, Instant.now(), Instant.now().plusSeconds(300)));
             var settled = new EnumMap<SignalConfig, SignalState>(SignalConfig.class);
@@ -175,11 +177,11 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
 
     private void seedDispatched(UUID enrollmentId, UUID decisionId) {
         seedDecided(enrollmentId, decisionId);
-        txTemplate.executeWithoutResult(status ->
+        txTemplate.executeWithoutResult(_ ->
                 assertThat(repository.markDispatched(enrollmentId, Instant.now())).isEqualTo(1));
     }
 
-    /** Publishing is mandatory, so the decisions exchange needs a bound queue or the publish throws. */
+    /** Publishing is mandatory, so the decisions exchange needs a bound queue or the publishing throws. */
     private String bindCaptureQueue() {
         var name = "test.retention.capture." + UUID.randomUUID();
         amqpAdmin.declareQueue(new Queue(name, false, false, false));
@@ -192,9 +194,9 @@ class PayloadRetentionConcurrencyIT extends BaseIntegrationTest {
     /** Reads the capture queue until it stays empty and returns the decision ids seen. */
     private Set<UUID> drainDecisionIds(String queue) {
         var seen = new HashSet<UUID>();
-        EnrollmentDecisionEvent event;
-        while ((event = rabbitTemplate.receiveAndConvert(queue, 500,
-                new ParameterizedTypeReference<EnrollmentDecisionEvent>() {})) != null) {
+        ParameterizedTypeReference<EnrollmentDecisionEvent> type = new ParameterizedTypeReference<>() {};
+        for (var event = rabbitTemplate.receiveAndConvert(queue, 500, type); event != null;
+             event = rabbitTemplate.receiveAndConvert(queue, 500, type)) {
             assertThat(event.originalRequest()).isNotNull();
             seen.add(event.decisionId());
         }

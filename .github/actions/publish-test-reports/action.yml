@@ -1,0 +1,23 @@
+name: Publish test reports
+description: Publishes Surefire and Failsafe JUnit reports as check runs. The calling job needs checks:write.
+
+runs:
+  using: composite
+  steps:
+    - name: Publish unit test report
+      uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
+      if: success() || failure()    # run even if tests fail
+      with:
+        name: Unit Tests
+        path: '*/target/surefire-reports/TEST-*.xml'
+        reporter: java-junit
+        fail-on-empty: false    # a changed module may have only ITs (no surefire unit tests)
+
+    - name: Publish integration test report
+      uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
+      if: success() || failure()
+      with:
+        name: Integration Tests
+        path: '*/target/failsafe-reports/TEST-*.xml'
+        reporter: java-junit
+        fail-on-empty: false

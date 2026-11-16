@@ -89,7 +89,9 @@ class ConcurrentIntakeInsertIT extends BaseIntegrationTest {
                 assertThat(pool.awaitTermination(20, TimeUnit.SECONDS))
                         .as("worker threads did not complete in time").isTrue();
             } finally {
-                if (!pool.isTerminated()) pool.shutdownNow();
+                if (!pool.isTerminated()) {
+                    pool.shutdownNow();
+                }
             }
         }
 
