@@ -10,6 +10,10 @@ import org.springframework.web.server.ResponseStatusException;
 public class PrerequisiteValidationException extends ResponseStatusException {
 
     public PrerequisiteValidationException(String reason) {
-        super(HttpStatus.FORBIDDEN, reason);
+        this(reason, null);
+    }
+
+    public PrerequisiteValidationException(String reason, Throwable cause) {
+        super(HttpStatus.FORBIDDEN, reason, cause);
     }
 }

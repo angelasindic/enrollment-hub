@@ -134,19 +134,20 @@ class TransactionalRaceConditionIT extends BaseIntegrationTest {
         CountDownLatch bothRead = new CountDownLatch(2);
         AtomicReference<Throwable> failure = new AtomicReference<>();
 
-        ExecutorService pool = Executors.newFixedThreadPool(2);
-        try {
-            pool.submit(() -> readModifyWrite(enrollmentId, useSelectForUpdate,
-                    signalA, newStateA, bothRead, failure));
-            pool.submit(() -> readModifyWrite(enrollmentId, useSelectForUpdate,
-                    signalB, newStateB, bothRead, failure));
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            try {
+                pool.submit(() -> readModifyWrite(enrollmentId, useSelectForUpdate,
+                        signalA, newStateA, bothRead, failure));
+                pool.submit(() -> readModifyWrite(enrollmentId, useSelectForUpdate,
+                        signalB, newStateB, bothRead, failure));
 
-            pool.shutdown();
-            boolean finished = pool.awaitTermination(20, TimeUnit.SECONDS);
-            assertThat(finished).as("worker threads did not complete in time").isTrue();
-        } finally {
-            if (!pool.isTerminated()) {
-                pool.shutdownNow();
+                pool.shutdown();
+                boolean finished = pool.awaitTermination(20, TimeUnit.SECONDS);
+                assertThat(finished).as("worker threads did not complete in time").isTrue();
+            } finally {
+                if (!pool.isTerminated()) {
+                    pool.shutdownNow();
+                }
             }
         }
 

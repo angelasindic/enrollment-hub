@@ -4,7 +4,6 @@ import dev.sindic.enrollmenthub.contracts.domain.PaymentType;
 import dev.sindic.enrollmenthub.decisionengine.api.EnrollmentRequest;
 import dev.sindic.enrollmenthub.contracts.events.DecisionResult;
 import dev.sindic.enrollmenthub.contracts.events.RiskLevel;
-import dev.sindic.enrollmenthub.contracts.events.CheckOutcome;
 import dev.sindic.enrollmenthub.contracts.events.SignalOutcome;
 import org.junit.jupiter.api.Test;
 

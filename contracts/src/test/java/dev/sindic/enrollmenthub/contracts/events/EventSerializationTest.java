@@ -41,8 +41,6 @@ class EventSerializationTest {
         return new EnrollmentSnapshot(paymentType, person(), address("DE"), address("DE"));
     }
 
-    private static final Instant FIXED_CREATED_AT = Instant.parse("2026-05-23T10:00:00Z");
-
     // ── Check request commands ────────────────────────────────────────────────
 
     @Test

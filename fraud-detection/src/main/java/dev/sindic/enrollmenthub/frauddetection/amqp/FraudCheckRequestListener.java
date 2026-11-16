@@ -19,7 +19,7 @@ class FraudCheckRequestListener {
 
     private final FraudDetectionService service;
 
-    public FraudCheckRequestListener(FraudDetectionService service) {
+    FraudCheckRequestListener(FraudDetectionService service) {
         this.service = service;
     }
 

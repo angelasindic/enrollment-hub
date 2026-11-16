@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -85,7 +86,7 @@ class EnrollmentDecisionListenerIT extends BaseIntegrationTest {
 
     @Test
     void poisonPill_routedToDeadLetterQueue() {
-        var poison = MessageBuilder.withBody("{\"garbage\": true}".getBytes())
+        var poison = MessageBuilder.withBody("{\"garbage\": true}".getBytes(StandardCharsets.UTF_8))
                 .setContentType(MessageProperties.CONTENT_TYPE_JSON).build();
         rabbitTemplate.send(AmqpConfig.DECISION_EXCHANGE, AmqpConfig.DECISION_ROUTING_KEY, poison);
 
@@ -94,7 +95,7 @@ class EnrollmentDecisionListenerIT extends BaseIntegrationTest {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             var dlqMessage = rabbitTemplate.receive(AmqpConfig.DECISION_DLQ, 100);
             assertThat(dlqMessage).isNotNull();
-            assertThat(new String(dlqMessage.getBody())).contains("garbage");
+            assertThat(new String(dlqMessage.getBody(), StandardCharsets.UTF_8)).contains("garbage");
         });
     }
 

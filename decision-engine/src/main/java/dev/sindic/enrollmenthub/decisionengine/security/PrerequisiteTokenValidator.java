@@ -72,7 +72,7 @@ public class PrerequisiteTokenValidator {
         try {
             jwt = decoder.decode(token);
         } catch (JwtException ex) {
-            throw reject("credit_card_check prerequisite token failed validation");
+            throw reject("credit_card_check prerequisite token failed validation", ex);
         }
         if (!CREDIT_CARD_CHECK.equals(jwt.getClaimAsString("type"))) {
             throw reject("prerequisite token is not a credit_card_check");
@@ -83,7 +83,16 @@ public class PrerequisiteTokenValidator {
     }
 
     private PrerequisiteValidationException reject(String reason) {
-        log.warn("Prerequisite rejected: {}", reason);
-        return new PrerequisiteValidationException(reason);
+        return reject(reason, null);
+    }
+
+    /** The cause stays server-side: it is logged and attached, never rendered into the 403 response. */
+    private PrerequisiteValidationException reject(String reason, Throwable cause) {
+        if (cause == null) {
+            log.warn("Prerequisite rejected: {}", reason);
+        } else {
+            log.warn("Prerequisite rejected: {} ({})", reason, cause.getMessage());
+        }
+        return new PrerequisiteValidationException(reason, cause);
     }
 }

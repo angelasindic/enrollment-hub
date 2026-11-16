@@ -154,7 +154,7 @@ class AmqpConfigTest {
     void checkChannelTopology_bindsRequestQueuesBySignalName() {
         var requestBindings = new AmqpConfig().checkChannelTopology().getDeclarables().stream()
                 .filter(Binding.class::isInstance).map(Binding.class::cast)
-                .filter(b -> b.getExchange().equals("enrollment.check.request"))
+                .filter(b -> "enrollment.check.request".equals(b.getExchange()))
                 .toList();
 
         assertThat(requestBindings).anySatisfy(b -> {

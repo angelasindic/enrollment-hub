@@ -1,0 +1,16 @@
+name: Setup Java and Maven
+description: Temurin JDK with Maven dependency cache. The repository must already be checked out.
+
+inputs:
+  java-version:
+    description: JDK major version
+    default: '25'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v5
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: maven

@@ -20,6 +20,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -115,7 +116,7 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
 
     @Test
     void poisonPill_routedToDeadLetterQueue() {
-        var poison = MessageBuilder.withBody("{\"garbage\": true}".getBytes())
+        var poison = MessageBuilder.withBody("{\"garbage\": true}".getBytes(StandardCharsets.UTF_8))
                 .setContentType(MessageProperties.CONTENT_TYPE_JSON).build();
         rabbitTemplate.send(REQUEST_EXCHANGE, GEO_KEY, poison);
 
@@ -124,7 +125,7 @@ class GeoScoreRequestListenerIT extends BaseIntegrationTest {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
             var dlqMessage = rabbitTemplate.receive(REQUEST_DLQ, 100);
             assertThat(dlqMessage).isNotNull();
-            assertThat(new String(dlqMessage.getBody())).contains("garbage");
+            assertThat(new String(dlqMessage.getBody(), StandardCharsets.UTF_8)).contains("garbage");
         });
     }
 
