@@ -50,3 +50,15 @@ jobs:
       - name: Checkstyle and PMD
         run: |
           ./mvnw -pl "${{ needs.changes.outputs.list }}" -am process-test-classes -Pquality --batch-mode --no-transfer-progress --fail-at-end
+
+  # Single required check for branch protection. Path filters skip jobs, and a skipped required
+  # check blocks the merge; this job passes when every upstream job succeeded or was skipped.
+  ci-ok:
+    if: always()
+    needs: [ changes, build-test, static-analysis ]
+    runs-on: ubuntu-latest
+    permissions: { }
+    steps:
+      - name: Fail if an upstream job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
